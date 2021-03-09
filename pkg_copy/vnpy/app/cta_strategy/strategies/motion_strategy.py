@@ -9,59 +9,51 @@ from vnpy.app.cta_strategy import (
     ArrayManager,
 )
 
+from vnpy.trader.constant import Interval
+
 
 class MotionStrategy(CtaTemplate):
     """"""
 
     author = "用Python的交易员"
 
-    atr_length = 22
-    atr_ma_length = 10
-    rsi_length = 5
-    rsi_entry = 16
-    trailing_percent = 0.8
-    fixed_size = 1
-
     atr_value = 0
-    atr_ma = 0
-    rsi_value = 0
-    rsi_buy = 0
-    rsi_sell = 0
-    intra_trade_high = 0
-    intra_trade_low = 0
+
+    ##  孕线策略
+    inside_bar_unit = "minute"  ## 1m\1h\1d
+    inside_bar_length = 5
+    # k0_frequecy = "1m"  ## 1m\1h\1d 直接取回测设置中的周期即可，根据周期判断能否进行回测，并设置k0为相应的数值。
+
+
 
     parameters = [
-        "atr_length",
-        "atr_ma_length",
-        "rsi_length",
-        "rsi_entry",
-        "trailing_percent",
-        "fixed_size"
+        "inside_bar_unit",
+        "inside_bar_length"
     ]
     variables = [
-        "atr_value",
-        "atr_ma",
-        "rsi_value",
-        "rsi_buy",
-        "rsi_sell",
-        "intra_trade_high",
-        "intra_trade_low"
+        "atr_value"
     ]
 
     def __init__(self, cta_engine, strategy_name, vt_symbol, setting):
         """"""
         super().__init__(cta_engine, strategy_name, vt_symbol, setting)
-        self.bg = BarGenerator(self.on_bar)
+        # self.bg = BarGenerator(self.on_bar)
+
+        self.interval = {"minute": Interval.MINUTE}.get(self.inside_bar_unit)
+        self.bgw = BarGenerator(self.on_bar, self.inside_bar_length, self.on_window_bar, self.interval)
+        self.amw = ArrayManager()
         self.am = ArrayManager()
 
     def on_init(self):
         """
         Callback when strategy is inited.
         """
-        self.write_log("策略初始化")
+        self.write_log("策略初始化：" + self.__class__.__name__)
+        self.inside_bars = {"k0": 0, "k1": 0, "k2": 0}
 
-        self.rsi_buy = 50 + self.rsi_entry
-        self.rsi_sell = 50 - self.rsi_entry
+        self.k0_last = 0
+        self.k1 = {"open": 0, "high": 0, "low": 0, "close": 0}
+        self.k2 = {"open": 0, "high": 0, "low": 0, "close": 0}
 
         self.load_bar(10)
 
@@ -81,51 +73,43 @@ class MotionStrategy(CtaTemplate):
         """
         Callback of new tick data update.
         """
-        self.bg.update_tick(tick)
+        # self.bg.update_tick(tick)
 
     def on_bar(self, bar: BarData):
         """
         Callback of new bar data update.
         """
-        self.cancel_all()
+        self.write_log("bar: " + str(bar.datetime))
 
+        self.cancel_all()
+        self.bgw.update_bar(bar)
         am = self.am
         am.update_bar(bar)
         if not am.inited:
             return
 
-        atr_array = am.atr(self.atr_length, array=True)
-        self.atr_value = atr_array[-1]
-        self.atr_ma = atr_array[-self.atr_ma_length:].mean()
-        self.rsi_value = am.rsi(self.rsi_length)
-
-        if self.pos == 0:
-            self.intra_trade_high = bar.high_price
-            self.intra_trade_low = bar.low_price
-
-            if self.atr_value > self.atr_ma:
-                if self.rsi_value > self.rsi_buy:
-                    self.buy(bar.close_price + 5, self.fixed_size)
-                elif self.rsi_value < self.rsi_sell:
-                    self.short(bar.close_price - 5, self.fixed_size)
-
-        elif self.pos > 0:
-            self.intra_trade_high = max(self.intra_trade_high, bar.high_price)
-            self.intra_trade_low = bar.low_price
-
-            long_stop = self.intra_trade_high * \
-                (1 - self.trailing_percent / 100)
-            self.sell(long_stop, abs(self.pos), stop=True)
-
-        elif self.pos < 0:
-            self.intra_trade_low = min(self.intra_trade_low, bar.low_price)
-            self.intra_trade_high = bar.high_price
-
-            short_stop = self.intra_trade_low * \
-                (1 + self.trailing_percent / 100)
-            self.cover(short_stop, abs(self.pos), stop=True)
+        self.k0_last = bar.close_price
+        # self.write_log("k0_last: " + str(self.k0_last))
 
         self.put_event()
+
+    def on_window_bar(self, bar: BarData):
+
+        self.bgw.update_bar(bar)
+        self.amw.update_bar(bar)
+        self.k2["open"] = self.k1["open"]
+        self.k2["high"] = self.k1["high"]
+        self.k2["low"] = self.k1["low"]
+        self.k2["close"] = self.k1["close"]
+        self.k1["open"] = bar.open_price
+        self.k1["high"] = bar.high_price
+        self.k1["low"] = bar.low_price
+        self.k1["close"] = bar.close_price
+        self.write_log("w_bar: " + str(bar.datetime))
+        # self.write_log("k1: " + str(self.k1))
+        # self.write_log("k2: " + str(self.k2))
+        self.put_event()
+        pass
 
     def on_order(self, order: OrderData):
         """
