@@ -41,8 +41,7 @@ class MotionStrategy(CtaTemplate):
 
         self.interval = {"minute": Interval.MINUTE}.get(self.inside_bar_unit)
         self.bgw = BarGenerator(self.on_bar, self.inside_bar_length, self.on_window_bar, self.interval)
-        self.amw = ArrayManager()
-        self.am = ArrayManager()
+        self.am = ArrayManager(100)  # 取决于历史数据准备多长 x * inside_bar_length，参考进阶开仓条件
 
     def on_init(self):
         """
@@ -79,24 +78,22 @@ class MotionStrategy(CtaTemplate):
         """
         Callback of new bar data update.
         """
-        self.write_log("bar: " + str(bar.datetime))
-
-        self.cancel_all()
-        self.bgw.update_bar(bar)
-        am = self.am
-        am.update_bar(bar)
-        if not am.inited:
-            return
+        # am = self.am
+        # am.update_bar(bar)
+        # if not am.inited:
+        #     return
 
         self.k0_last = bar.close_price
-        # self.write_log("k0_last: " + str(self.k0_last))
+        self.write_log("bar: " + str(bar.datetime))
+        self.write_log("k0_last: " + str(self.k0_last))
+        self.bgw.update_bar(bar)
+
+        self.cancel_all()
 
         self.put_event()
 
     def on_window_bar(self, bar: BarData):
 
-        self.bgw.update_bar(bar)
-        self.amw.update_bar(bar)
         self.k2["open"] = self.k1["open"]
         self.k2["high"] = self.k1["high"]
         self.k2["low"] = self.k1["low"]
@@ -106,8 +103,8 @@ class MotionStrategy(CtaTemplate):
         self.k1["low"] = bar.low_price
         self.k1["close"] = bar.close_price
         self.write_log("w_bar: " + str(bar.datetime))
-        # self.write_log("k1: " + str(self.k1))
-        # self.write_log("k2: " + str(self.k2))
+        self.write_log("k1_close: " + str(self.k1["close"]))
+        self.write_log("k2_close: " + str(self.k2["close"]))
         self.put_event()
         pass
 
