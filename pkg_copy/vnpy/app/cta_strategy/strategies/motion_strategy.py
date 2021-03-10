@@ -22,13 +22,19 @@ class MotionStrategy(CtaTemplate):
     ##  孕线策略
     inside_bar_unit = "minute"  ## 1m\1h\1d
     inside_bar_length = 5
+    body_ratio = 50
+    k2_min_range = 0
+    k1_min_range = 0
     # k0_frequecy = "1m"  ## 1m\1h\1d 直接取回测设置中的周期即可，根据周期判断能否进行回测，并设置k0为相应的数值。
 
 
 
     parameters = [
         "inside_bar_unit",
-        "inside_bar_length"
+        "inside_bar_length",
+        "body_ratio",
+        "k2_min_range",
+        "k1_min_range"
     ]
     variables = [
         "atr_value"
@@ -102,9 +108,29 @@ class MotionStrategy(CtaTemplate):
         self.k1["high"] = bar.high_price
         self.k1["low"] = bar.low_price
         self.k1["close"] = bar.close_price
-        self.write_log("w_bar: " + str(bar.datetime))
-        self.write_log("k1_close: " + str(self.k1["close"]))
-        self.write_log("k2_close: " + str(self.k2["close"]))
+
+
+        if self.k2["high"] >= self.k1["high"] and self.k2["low"] <= self.k1["low"]:
+            self.inside_bar_signal = True
+        else:
+            self.inside_bar_signal = False
+
+        condition_body = abs(self.k2["open"] - self.k2["close"]) >= self.body_ratio / 100 * abs(self.k2["high"] - self.k2["low"])  # 0 >= 0
+        condition_k1_range = self.k1["high"] - self.k1["low"] > self.k1_min_range
+        condition_k2_range = self.k2["high"] - self.k2["low"] > self.k2_min_range
+        if self.inside_bar_signal and condition_body and condition_k1_range and condition_k2_range:
+            self.write_log("w_bar: " + str(bar.datetime))
+            self.write_log("k1_high: " + str(self.k1["high"]))
+            self.write_log("k1_low: " + str(self.k1["low"]))
+            self.write_log("k2_high: " + str(self.k2["high"]))
+            self.write_log("k2_low: " + str(self.k2["low"]))
+            self.write_log("k2_open: " + str(self.k2["open"]))
+            self.write_log("k2_close: " + str(self.k2["close"]))
+            self.write_log("buy or short OK.")
+            self.open_position_condition = True
+        else:
+            self.open_position_condition = False
+
         self.put_event()
         pass
 
