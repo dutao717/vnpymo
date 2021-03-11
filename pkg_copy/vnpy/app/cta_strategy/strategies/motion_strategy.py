@@ -92,7 +92,7 @@ class MotionStrategy(CtaTemplate):
         self.k0_last = bar.close_price
         self.write_log("bar: " + str(bar.datetime))
         self.write_log("k0_last: " + str(self.k0_last))
-        self.bgw.update_bar(bar)
+        self.bgw.update_bar(bar) # trigger on_window_bar()
 
         self.cancel_all()
 
