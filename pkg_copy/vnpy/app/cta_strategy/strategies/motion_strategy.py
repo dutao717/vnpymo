@@ -21,7 +21,9 @@ from vnpy.trader.object import ContractData
 
 from vnpy.trader.converter import PositionHolding
 
-from vnpy.trader.constant import Interval
+from vnpy.trader.constant import Interval, Status
+
+from vnpy.app.cta_strategy.base import StopOrderStatus
 
 
 class MotionStrategy(CtaTemplate):
@@ -37,6 +39,7 @@ class MotionStrategy(CtaTemplate):
     body_ratio = 50
     k2_min_range = 0
     k1_min_range = 0
+    inside_bar_pos_num = 3
     # k0_frequecy = "1m"  ## 1m\1h\1d 直接取回测设置中的周期即可，根据周期判断能否进行回测，并设置k0为相应的数值。
 
 
@@ -46,7 +49,8 @@ class MotionStrategy(CtaTemplate):
         "inside_bar_length",
         "body_ratio",
         "k2_min_range",
-        "k1_min_range"
+        "k1_min_range",
+        "inside_bar_pos_num"
     ]
     variables = [
         "atr_value"
@@ -55,7 +59,6 @@ class MotionStrategy(CtaTemplate):
     def __init__(self, cta_engine, strategy_name, vt_symbol, setting):
         """"""
         super().__init__(cta_engine, strategy_name, vt_symbol, setting)
-        # self.bg = BarGenerator(self.on_bar)
 
         self.interval = {"minute": Interval.MINUTE}.get(self.inside_bar_unit)
         self.bgw = BarGenerator(self.on_bar, self.inside_bar_length, self.on_window_bar, self.interval)
@@ -71,8 +74,10 @@ class MotionStrategy(CtaTemplate):
             pricetick=None
         )
         print(self.cta_engine.vt_symbol, self.cta_engine.exchange)
+        # 0a, 0b, 1a, 1b
+        self.target_position = {(str(i) + j):0 for i in range(self.inside_bar_pos_num) for j in ("a", "b")}
         self.pos_holdings = {
-            "0a": {
+            i: {
                 "direc": DIREC_LONG,
                 "ph":PositionHolding(contract=c),
                 "cost_basis": 0,
@@ -82,7 +87,7 @@ class MotionStrategy(CtaTemplate):
                 "open_order": None,
                 "stop_lose_order":None,
                 "stop_win_order": None
-            },
+            } for i in self.target_position.keys()
         }
 
     def on_init(self):
@@ -90,15 +95,19 @@ class MotionStrategy(CtaTemplate):
         Callback when strategy is inited.
         """
         self.write_log("策略初始化：" + self.__class__.__name__)
-        self.inside_bars = {"k0": 0, "k1": 0, "k2": 0}
 
         self.k0 = {"ask1": 0, "bid1": 0}
         self.k1 = {"open": 0, "high": 0, "low": 0, "close": 0}
         self.k2 = {"open": 0, "high": 0, "low": 0, "close": 0}
         self.open_position_condition = False
-        self.target_position = {"0a":0, "0b":0, "1a":0, "1b":0, "2a":0, "2b":0}
 
+        # TODO：初始化持仓。
+
+
+        #注册或者说配置一个参数，告知回测引擎从第几个bar之后开始跑正式回测。10天的数据都跨过去。这个函数会给callback赋值，所以请使用。
+        #但是需要注意的是，在on_bar中，要含有以下逻辑，没有到10天，不可以下单。也就是self.inited = True之后才可以下单
         self.load_bar(10)
+
 
     def on_start(self):
         """
@@ -117,7 +126,7 @@ class MotionStrategy(CtaTemplate):
         Callback of new tick data update.
         """
         # 等需要上市盘的时候，此处需要将on_bar的下单逻辑抽象一下，在此处也要进行调用。
-        # self.bg.update_tick(tick)
+        # self.bgw.update_tick(tick)
 
     def on_bar(self, bar: BarData):
         """
@@ -125,36 +134,47 @@ class MotionStrategy(CtaTemplate):
         """
         # am = self.am
         # am.update_bar(bar)
-        # if not am.inited:
-        #     return
-        print("=======on_bar=======")
-        print("ph: active_orders", self.pos_holdings["0a"]["ph"].active_orders)
-        updated_active_limit_orders = {k: v for (k, v) in self.cta_engine.active_limit_orders.items() if v.is_active()}
-        print("updated_active_limit_orders:", updated_active_limit_orders)
-        assert len(self.pos_holdings["0a"]["ph"].active_orders) ==len(self.cta_engine.active_limit_orders)
-
+        # load_bar 以及 inited，只是为了准备am数据
         self.k0["ask1"] = bar.close_price # ask1 卖一
         self.k0["bid1"] = bar.close_price # bid1 买一
-        # self.write_log("bar: " + str(bar.datetime))
-        # self.write_log("k0_last: " + str(self.k0_last))
         self.bgw.update_bar(bar) # trigger on_window_bar()
 
-        ## 下单逻辑，日后需要抽象出来，on_tick也需要调用。首先需要下达限价单，后续此处需要进行根据持仓情况下达止损单。因此全局应该有一个目标仓位的仓位管理设置。
-        # self.cancel_all()
+        if not self.inited:
+            return
+        # print("=======on_bar=======")
+        # self.write_log("bar: " + str(bar.datetime))
+        # print("ph ph active_orders: ", self.pos_holdings["0a"]["ph"].active_orders)
+        # print("active_limit_orders: ", self.cta_engine.active_limit_orders)
 
+        assert len(self.pos_holdings["0a"]["ph"].active_orders) ==len(self.cta_engine.active_limit_orders)
+        assert self.pos == self.pos_holdings["0a"]["ph"].long_pos + self.pos_holdings["0a"]["ph"].short_pos
 
+        # 下单逻辑，日后需要抽象出来，on_tick也需要调用。首先需要下达限价单，后续此处需要进行根据持仓情况下达止损单。
         if self.pos_holdings["0a"]["status"] in (CLOSE_FINISHED, OPEN_STARTED):
             if self.open_position_condition:
                 if self.k0["ask1"] > self.k1["high"]:
-                    order_amount = round(self.target_position["0a"]) # - self.pos-short+long - self.pos—openorder)
-                    if order_amount > 0:
-                        self.buy(bar.close_price, self.target_position["0a"])
+                    # target_position 始终为正，根据开仓方向，计算order_amount的时候要进行符号方向的区别
+                    open_order = self.pos_holdings["0a"].get("open_order")
+                    if open_order is None:
+                        self.write_log(self.get_signal_str(bar.datetime))
+                        pos_amount = self.pos_holdings["0a"]["ph"].long_pos + self.pos_holdings["0a"]["ph"].short_pos
+                        order_amount = round(self.target_position["0a"] - pos_amount)
+                        vt_orderid = self.buy(bar.close_price, order_amount)[0]
+                        self.pos_holdings["0a"]["open_order"] = self.cta_engine.active_limit_orders[vt_orderid]
+                        self.pos_holdings["0a"]["status"] = OPEN_STARTED
+                # TODO: 开空的逻辑
         elif self.pos_holdings["0a"]["status"] in (OPEN_FINISHED, CLOSE_STARTED):
-            self.sell(self.k0["bid1"] + 10, self.target_position["0a"])
-            self.sell(self.k0["bid1"] - 10, self.target_position["0a"], True)
+            stop_win_order = self.pos_holdings["0a"].get("stop_win_order")
+            stop_lose_order = self.pos_holdings["0a"].get("stop_lose_order")
+            if stop_win_order is None:
+                vt_orderid = self.sell(self.k0["bid1"] + 10, self.target_position["0a"])[0]
+                self.pos_holdings["0a"]["stop_win_order"] = self.cta_engine.active_limit_orders[vt_orderid]
+            if stop_lose_order is None:
+                vt_orderid = self.sell(self.k0["bid1"] - 10, self.target_position["0a"], True)[0]
+                self.pos_holdings["0a"]["stop_lose_order"] = self.cta_engine.active_stop_orders[vt_orderid]
+            self.pos_holdings["0a"]["status"] = CLOSE_STARTED
 
         self.put_event()
-
 
     def on_window_bar(self, bar: BarData):
 
@@ -177,15 +197,7 @@ class MotionStrategy(CtaTemplate):
         condition_k1_range = self.k1["high"] - self.k1["low"] > self.k1_min_range
         condition_k2_range = self.k2["high"] - self.k2["low"] > self.k2_min_range
         if self.inside_bar_signal and condition_body and condition_k1_range and condition_k2_range:
-            self.write_log("w_bar: " + str(bar.datetime))
-            self.write_log("k1_high: " + str(self.k1["high"]))
-            self.write_log("k1_low: " + str(self.k1["low"]))
-            self.write_log("k2_high: " + str(self.k2["high"]))
-            self.write_log("k2_low: " + str(self.k2["low"]))
-            self.write_log("k2_open: " + str(self.k2["open"]))
-            self.write_log("k2_close: " + str(self.k2["close"]))
-            self.write_log("buy or short OK.")
-            self.target_position["0a"] = 5
+            self.target_position["0a"] = 2
             self.open_position_condition = True
         else:
             self.open_position_condition = False
@@ -205,7 +217,8 @@ class MotionStrategy(CtaTemplate):
         print("bar: " + str(order.datetime))
 
         self.pos_holdings["0a"]["ph"].update_order(order)
-        self.write_log("on_order: buy 1000")
+        self.write_log("="*10 + "on_order" + "="*10)
+        self.write_log(self.get_order_str(order))
 
         print("pos:" + str(self.pos))
         print("active_limit_order:" ,self.cta_engine.active_limit_orders)
@@ -214,11 +227,6 @@ class MotionStrategy(CtaTemplate):
 
         updated_active_limit_orders = {k: v for (k, v) in self.cta_engine.active_limit_orders.items() if v.is_active()}
         print("updated_active_limit_orders:", updated_active_limit_orders)
-
-
-
-
-
 
     def on_trade(self, trade: TradeData):
         """
@@ -236,12 +244,26 @@ class MotionStrategy(CtaTemplate):
         print("active_stop_order:", len(self.cta_engine.active_stop_orders))
         assert self.pos == self.pos_holdings["0a"]["ph"].long_pos + self.pos_holdings["0a"]["ph"].short_pos
 
-
+        self.write_log("="*10 + "on_trade" + "="*10)
         self.write_log("pos: " + str(self.pos))
         if self.pos_holdings["0a"]["ph"].long_pos + self.pos_holdings["0a"]["ph"].short_pos == self.target_position["0a"] and self.target_position != 0:
             self.pos_holdings["0a"]["status"] = OPEN_FINISHED
+            self.pos_holdings["0a"]["open_order"] = None
         elif self.pos_holdings["0a"]["ph"].long_pos == 0 and self.pos_holdings["0a"]["ph"].short_pos ==0:
             self.pos_holdings["0a"]["status"] = CLOSE_FINISHED
+            stop_win_order = self.pos_holdings["0a"]["stop_win_order"]
+            stop_lose_order = self.pos_holdings["0a"]["stop_lose_order"]
+            if stop_win_order:
+                if stop_win_order.status != Status.ALLTRADED:
+                    self.cancel_order(stop_win_order.vt_orderid)
+                self.pos_holdings["0a"]["stop_win_order"] = None
+            if stop_lose_order:
+                if stop_lose_order.status != StopOrderStatus.TRIGGERED:
+                    self.cancel_order(stop_lose_order.stop_orderid)
+                self.pos_holdings["0a"]["stop_lose_order"] = None
+
+        # 建完仓，应该把open_order设置为None；
+        # 平完仓，应该把两个stop_order设置为None，并将另一个stoporder、cancel掉
 
         self.put_event()
 
@@ -249,4 +271,42 @@ class MotionStrategy(CtaTemplate):
         """
         Callback of stop order update.
         """
-        pass
+        print("======on_stop_order======")
+        self.write_log("="*10 + "on_stop_order" + "="*10)
+        self.write_log(self.get_stop_order_str(stop_order))
+
+    def get_signal_str(self, dt):
+        signal_str = "Signal Info\n%s\nk2O:%s, k2C:%s\nk2H:%s, k2L:%s\nK1H:%s, k1L:%s\nk0A:%s, k0B:%s" % (
+            dt,
+            self.k2["open"],
+            self.k2["close"],
+            self.k2["high"],
+            self.k2["low"],
+            self.k1["high"],
+            self.k1["low"],
+            self.k0["ask1"],
+            self.k0["bid1"]
+        )
+        return signal_str
+
+    def get_stop_order_str(self, order: StopOrder):
+        order_str = "on_stop_order\n%s, %s\n%s, %s\n%s, %s" %(
+            order.stop_orderid,
+            order.status.name,
+            order.direction.name,
+            order.offset.name,
+            order.volume,
+            order.price
+        )
+        return order_str
+
+    def get_order_str(self, order: OrderData):
+        order_str = "on_order\n%s, %s\n%s, %s\n%s, %s" %(
+            order.vt_orderid,
+            order.status.name,
+            order.direction.name,
+            order.offset.name,
+            order.traded,
+            order.price
+        )
+        return order_str
