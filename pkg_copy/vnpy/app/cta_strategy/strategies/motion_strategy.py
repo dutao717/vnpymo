@@ -99,6 +99,9 @@ class MotionStrategy(CtaTemplate):
                 "stop_win_order": None
             } for i in self.target_position.keys()
         }
+        self.engine_params = {
+            "size": self.cta_engine.size
+        }
 
     def on_init(self):
         """
@@ -126,6 +129,10 @@ class MotionStrategy(CtaTemplate):
         """
         Callback when strategy is started.
         """
+
+        print(self.get_parameters())
+        print(self.cta_engine.size)
+        print(self.cta_engine.vt_symbol)
         self.write_log("策略启动")
 
     def on_stop(self):
@@ -215,7 +222,7 @@ class MotionStrategy(CtaTemplate):
         condition_k2_range = self.k2["high"] - self.k2["low"] > self.k2_min_range
         if self.inside_bar_signal and condition_body and condition_k1_range and condition_k2_range:
             if self.open_amount_costomized:
-                self.target_position["0a"] = max(round(self.stop_lose_value / (self.stop_lose_abs_distance * 100)), 2)  # 1标准手点值
+                self.target_position["0a"] = max(round(self.stop_lose_value / (self.stop_lose_abs_distance * self.engine_params["size"])), 2)
             self.open_position_condition = True
         else:
             self.open_position_condition = False
