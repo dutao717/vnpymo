@@ -40,6 +40,11 @@ class MotionStrategy(CtaTemplate):
     k2_min_range = 0
     k1_min_range = 0
     inside_bar_pos_num = 3
+    points_diff = 2
+    error_space = 2
+    stop_lose_value = 10000
+    open_amount = 5
+    open_amount_style = "customized" ## costomized\fixed
     # k0_frequecy = "1m"  ## 1m\1h\1d 直接取回测设置中的周期即可，根据周期判断能否进行回测，并设置k0为相应的数值。
 
 
@@ -50,7 +55,12 @@ class MotionStrategy(CtaTemplate):
         "body_ratio",
         "k2_min_range",
         "k1_min_range",
-        "inside_bar_pos_num"
+        "inside_bar_pos_num",
+        "points_diff",
+        "error_space",
+        "stop_lose_value",
+        "open_amount",
+        "open_amount_style"
     ]
     variables = [
         "atr_value"
@@ -75,7 +85,7 @@ class MotionStrategy(CtaTemplate):
         )
         print(self.cta_engine.vt_symbol, self.cta_engine.exchange)
         # 0a, 0b, 1a, 1b
-        self.target_position = {(str(i) + j):0 for i in range(self.inside_bar_pos_num) for j in ("a", "b")}
+        self.target_position = {(str(i) + j):self.open_amount for i in range(self.inside_bar_pos_num) for j in ("a", "b")}
         self.pos_holdings = {
             i: {
                 "direc": DIREC_LONG,
@@ -100,6 +110,9 @@ class MotionStrategy(CtaTemplate):
         self.k1 = {"open": 0, "high": 0, "low": 0, "close": 0}
         self.k2 = {"open": 0, "high": 0, "low": 0, "close": 0}
         self.open_position_condition = False
+        self.stop_lose_abs_distance = 0
+        ## assert open_amount_style and inside_bar_unit
+        self.open_amount_costomized = self.open_amount_style == "customized"
 
         # TODO：初始化持仓。
 
@@ -155,22 +168,24 @@ class MotionStrategy(CtaTemplate):
                 if self.k0["ask1"] > self.k1["high"]:
                     # target_position 始终为正，根据开仓方向，计算order_amount的时候要进行符号方向的区别
                     open_order = self.pos_holdings["0a"].get("open_order")
-                    if open_order is None:
+                    if open_order is None:  # 可以根据下单时间，计算open_order的持续时间，进行撤单、并设为None，实现多少个bar撤单
                         self.write_log(self.get_signal_str(bar.datetime))
                         pos_amount = self.pos_holdings["0a"]["ph"].long_pos + self.pos_holdings["0a"]["ph"].short_pos
                         order_amount = round(self.target_position["0a"] - pos_amount)
                         vt_orderid = self.buy(bar.close_price, order_amount)[0]
                         self.pos_holdings["0a"]["open_order"] = self.cta_engine.active_limit_orders[vt_orderid]
+                        self.pos_holdings["0a"]["stop_lose_price"] = self.k1["low"] - self.error_space - self.points_diff
+                        self.pos_holdings["0a"]["stop_win_price"] = self.k0["bid1"] + self.stop_lose_abs_distance
                         self.pos_holdings["0a"]["status"] = OPEN_STARTED
                 # TODO: 开空的逻辑
         elif self.pos_holdings["0a"]["status"] in (OPEN_FINISHED, CLOSE_STARTED):
             stop_win_order = self.pos_holdings["0a"].get("stop_win_order")
             stop_lose_order = self.pos_holdings["0a"].get("stop_lose_order")
             if stop_win_order is None:
-                vt_orderid = self.sell(self.k0["bid1"] + 10, self.target_position["0a"])[0]
+                vt_orderid = self.sell(self.pos_holdings["0a"].get("stop_win_price"), self.target_position["0a"])[0]
                 self.pos_holdings["0a"]["stop_win_order"] = self.cta_engine.active_limit_orders[vt_orderid]
             if stop_lose_order is None:
-                vt_orderid = self.sell(self.k0["bid1"] - 10, self.target_position["0a"], True)[0]
+                vt_orderid = self.sell(self.pos_holdings["0a"].get("stop_lose_price"), self.target_position["0a"], True)[0]
                 self.pos_holdings["0a"]["stop_lose_order"] = self.cta_engine.active_stop_orders[vt_orderid]
             self.pos_holdings["0a"]["status"] = CLOSE_STARTED
 
@@ -187,6 +202,8 @@ class MotionStrategy(CtaTemplate):
         self.k1["low"] = bar.low_price
         self.k1["close"] = bar.close_price
 
+        self.stop_lose_abs_distance = self.k1["high"] - self.k1["low"] + self.points_diff + self.error_space
+
 
         if self.k2["high"] >= self.k1["high"] and self.k2["low"] <= self.k1["low"]:
             self.inside_bar_signal = True
@@ -197,7 +214,8 @@ class MotionStrategy(CtaTemplate):
         condition_k1_range = self.k1["high"] - self.k1["low"] > self.k1_min_range
         condition_k2_range = self.k2["high"] - self.k2["low"] > self.k2_min_range
         if self.inside_bar_signal and condition_body and condition_k1_range and condition_k2_range:
-            self.target_position["0a"] = 2
+            if self.open_amount_costomized:
+                self.target_position["0a"] = max(round(self.stop_lose_value / (self.stop_lose_abs_distance * 100)), 2)  # 1标准手点值
             self.open_position_condition = True
         else:
             self.open_position_condition = False
