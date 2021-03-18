@@ -167,32 +167,48 @@ class MotionStrategy(CtaTemplate):
         # print("active_limit_orders: ", self.cta_engine.active_limit_orders)
 
         assert len(self.pos_holdings["0a"]["ph"].active_orders) ==len(self.cta_engine.active_limit_orders)
-        assert self.pos == self.pos_holdings["0a"]["ph"].long_pos + self.pos_holdings["0a"]["ph"].short_pos
+        assert self.pos == self.pos_holdings["0a"]["ph"].long_pos - self.pos_holdings["0a"]["ph"].short_pos
 
         # 下单逻辑，日后需要抽象出来，on_tick也需要调用。首先需要下达限价单，后续此处需要进行根据持仓情况下达止损单。
         if self.pos_holdings["0a"]["status"] in (CLOSE_FINISHED, OPEN_STARTED):
-            if self.open_position_condition:
+            open_order = self.pos_holdings["0a"].get("open_order")
+            if self.open_position_condition and open_order is None: # 可以根据下单时间，计算open_order的持续时间，进行撤单、并设为None，实现多少个bar撤单
                 if self.k0["ask1"] > self.k1["high"]:
                     # target_position 始终为正，根据开仓方向，计算order_amount的时候要进行符号方向的区别
-                    open_order = self.pos_holdings["0a"].get("open_order")
-                    if open_order is None:  # 可以根据下单时间，计算open_order的持续时间，进行撤单、并设为None，实现多少个bar撤单
-                        self.write_log(self.get_signal_str(bar.datetime))
-                        pos_amount = self.pos_holdings["0a"]["ph"].long_pos + self.pos_holdings["0a"]["ph"].short_pos
-                        order_amount = round(self.target_position["0a"] - pos_amount)
-                        vt_orderid = self.buy(bar.close_price, order_amount)[0]
-                        self.pos_holdings["0a"]["open_order"] = self.cta_engine.active_limit_orders[vt_orderid]
-                        self.pos_holdings["0a"]["stop_lose_price"] = self.k1["low"] - self.error_space - self.points_diff
-                        self.pos_holdings["0a"]["stop_win_price"] = self.k0["bid1"] + self.stop_lose_abs_distance
-                        self.pos_holdings["0a"]["status"] = OPEN_STARTED
-                # TODO: 开空的逻辑
+                    self.write_log(self.get_signal_str(bar.datetime))
+                    pos_amount = self.pos_holdings["0a"]["ph"].long_pos - self.pos_holdings["0a"]["ph"].short_pos
+                    order_amount = round(self.target_position["0a"] - pos_amount)
+                    vt_orderid = self.buy(self.k0["ask1"], order_amount)[0]
+                    self.pos_holdings["0a"]["open_order"] = self.cta_engine.active_limit_orders[vt_orderid]
+                    self.pos_holdings["0a"]["stop_lose_price"] = self.k1["low"] - self.error_space - self.points_diff
+                    self.pos_holdings["0a"]["stop_win_price"] = self.k0["ask1"] + self.stop_lose_abs_distance
+                    self.pos_holdings["0a"]["status"] = OPEN_STARTED
+                    self.pos_holdings["0a"]["direc"] = DIREC_LONG
+                elif self.k0["bid1"] < self.k1["low"]:
+                    self.write_log(self.get_signal_str(bar.datetime))
+                    pos_amount = self.pos_holdings["0a"]["ph"].long_pos - self.pos_holdings["0a"]["ph"].short_pos
+                    order_amount = round(self.target_position["0a"] + pos_amount)
+                    vt_orderid = self.short(self.k0["bid1"], order_amount)[0]
+                    self.pos_holdings["0a"]["open_order"] = self.cta_engine.active_limit_orders[vt_orderid]
+                    self.pos_holdings["0a"]["stop_lose_price"] = self.k1["high"] + self.error_space + self.points_diff
+                    self.pos_holdings["0a"]["stop_win_price"] = self.k0["bid1"] - self.stop_lose_abs_distance
+                    self.pos_holdings["0a"]["status"] = OPEN_STARTED
+                    self.pos_holdings["0a"]["direc"] = DIREC_SHORT
+
         elif self.pos_holdings["0a"]["status"] in (OPEN_FINISHED, CLOSE_STARTED):
             stop_win_order = self.pos_holdings["0a"].get("stop_win_order")
             stop_lose_order = self.pos_holdings["0a"].get("stop_lose_order")
             if stop_win_order is None:
-                vt_orderid = self.sell(self.pos_holdings["0a"].get("stop_win_price"), self.target_position["0a"])[0]
+                if self.pos_holdings["0a"]["direc"] == DIREC_LONG:
+                    vt_orderid = self.sell(self.pos_holdings["0a"].get("stop_win_price"), self.target_position["0a"])[0]
+                else:
+                    vt_orderid = self.cover(self.pos_holdings["0a"].get("stop_win_price"), self.target_position["0a"])[0]
                 self.pos_holdings["0a"]["stop_win_order"] = self.cta_engine.active_limit_orders[vt_orderid]
             if stop_lose_order is None:
-                vt_orderid = self.sell(self.pos_holdings["0a"].get("stop_lose_price"), self.target_position["0a"], True)[0]
+                if self.pos_holdings["0a"]["direc"] == DIREC_LONG:
+                    vt_orderid = self.sell(self.pos_holdings["0a"].get("stop_lose_price"), self.target_position["0a"], True)[0]
+                else:
+                    vt_orderid = self.cover(self.pos_holdings["0a"].get("stop_lose_price"), self.target_position["0a"], True)[0]
                 self.pos_holdings["0a"]["stop_lose_order"] = self.cta_engine.active_stop_orders[vt_orderid]
             self.pos_holdings["0a"]["status"] = CLOSE_STARTED
 
@@ -264,14 +280,17 @@ class MotionStrategy(CtaTemplate):
         self.pos_holdings["0a"]["ph"].update_trade(trade)
 
         print("pos:" + str(self.pos))
-        print("ph: pos", self.pos_holdings["0a"]["ph"].long_pos + self.pos_holdings["0a"]["ph"].short_pos)
+        print("ph: pos", self.pos_holdings["0a"]["ph"].long_pos - self.pos_holdings["0a"]["ph"].short_pos)
         print("active_limit_order:", len(self.cta_engine.active_limit_orders))
         print("active_stop_order:", len(self.cta_engine.active_stop_orders))
-        assert self.pos == self.pos_holdings["0a"]["ph"].long_pos + self.pos_holdings["0a"]["ph"].short_pos
+        assert self.pos == self.pos_holdings["0a"]["ph"].long_pos - self.pos_holdings["0a"]["ph"].short_pos
 
         self.write_log("="*10 + "on_trade" + "="*10)
         self.write_log("pos: " + str(self.pos))
-        if self.pos_holdings["0a"]["ph"].long_pos + self.pos_holdings["0a"]["ph"].short_pos == self.target_position["0a"] and self.target_position != 0:
+
+        if self.target_position["0a"] != 0 and (
+                (self.pos_holdings["0a"]["ph"].long_pos - self.pos_holdings["0a"]["ph"].short_pos == self.target_position["0a"] and self.pos_holdings["0a"]["direc"] == DIREC_LONG) or
+                (self.pos_holdings["0a"]["ph"].long_pos - self.pos_holdings["0a"]["ph"].short_pos == - self.target_position["0a"] and self.pos_holdings["0a"]["direc"] == DIREC_SHORT)) :
             self.pos_holdings["0a"]["status"] = OPEN_FINISHED
             self.pos_holdings["0a"]["open_order"] = None
         elif self.pos_holdings["0a"]["ph"].long_pos == 0 and self.pos_holdings["0a"]["ph"].short_pos ==0:
