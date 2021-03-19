@@ -86,6 +86,7 @@ class MotionStrategy(CtaTemplate):
         print(self.cta_engine.vt_symbol, self.cta_engine.exchange)
         # 0a, 0b, 1a, 1b
         self.target_position = {(str(i) + j):self.open_amount for i in range(self.inside_bar_pos_num) for j in ("a", "b")}
+        # 每次更新trade和order时，要逐个属性考虑一下是否需要更新或者重置。
         self.pos_holdings = {
             i: {
                 "direc": DIREC_LONG,
@@ -118,7 +119,6 @@ class MotionStrategy(CtaTemplate):
         self.open_amount_costomized = self.open_amount_style == "customized"
 
         # TODO：初始化持仓。
-
 
         #注册或者说配置一个参数，告知回测引擎从第几个bar之后开始跑正式回测。10天的数据都跨过去。这个函数会给callback赋值，所以请使用。
         #但是需要注意的是，在on_bar中，要含有以下逻辑，没有到10天，不可以下单。也就是self.inited = True之后才可以下单
@@ -198,19 +198,22 @@ class MotionStrategy(CtaTemplate):
         elif self.pos_holdings["0a"]["status"] in (OPEN_FINISHED, CLOSE_STARTED):
             stop_win_order = self.pos_holdings["0a"].get("stop_win_order")
             stop_lose_order = self.pos_holdings["0a"].get("stop_lose_order")
-            if stop_win_order is None:
+            stop_win_price = self.pos_holdings["0a"].get("stop_win_price")
+            stop_lose_price = self.pos_holdings["0a"].get("stop_lose_price")
+            if stop_win_order is None and stop_win_price != 0:
                 if self.pos_holdings["0a"]["direc"] == DIREC_LONG:
-                    vt_orderid = self.sell(self.pos_holdings["0a"].get("stop_win_price"), self.target_position["0a"])[0]
+                    vt_orderid = self.sell(stop_win_price, self.target_position["0a"])[0]
                 else:
-                    vt_orderid = self.cover(self.pos_holdings["0a"].get("stop_win_price"), self.target_position["0a"])[0]
+                    vt_orderid = self.cover(stop_win_price, self.target_position["0a"])[0]
                 self.pos_holdings["0a"]["stop_win_order"] = self.cta_engine.active_limit_orders[vt_orderid]
-            if stop_lose_order is None:
+                self.pos_holdings["0a"]["status"] = CLOSE_STARTED
+            if stop_lose_order is None and stop_lose_price != 0:
                 if self.pos_holdings["0a"]["direc"] == DIREC_LONG:
-                    vt_orderid = self.sell(self.pos_holdings["0a"].get("stop_lose_price"), self.target_position["0a"], True)[0]
+                    vt_orderid = self.sell(stop_lose_price, self.target_position["0a"], True)[0]
                 else:
-                    vt_orderid = self.cover(self.pos_holdings["0a"].get("stop_lose_price"), self.target_position["0a"], True)[0]
+                    vt_orderid = self.cover(stop_lose_price, self.target_position["0a"], True)[0]
                 self.pos_holdings["0a"]["stop_lose_order"] = self.cta_engine.active_stop_orders[vt_orderid]
-            self.pos_holdings["0a"]["status"] = CLOSE_STARTED
+                self.pos_holdings["0a"]["status"] = CLOSE_STARTED
 
         self.put_event()
 
@@ -278,6 +281,7 @@ class MotionStrategy(CtaTemplate):
         print("trade:", trade)
         # 此处需要增加根据成交回报下达止损单的逻辑，但目前还不涉及实盘，不着急。
         self.pos_holdings["0a"]["ph"].update_trade(trade)
+        # TODO: update_trade的时候计算cost_basis
 
         print("pos:" + str(self.pos))
         print("ph: pos", self.pos_holdings["0a"]["ph"].long_pos - self.pos_holdings["0a"]["ph"].short_pos)
@@ -301,10 +305,12 @@ class MotionStrategy(CtaTemplate):
                 if stop_win_order.status != Status.ALLTRADED:
                     self.cancel_order(stop_win_order.vt_orderid)
                 self.pos_holdings["0a"]["stop_win_order"] = None
+                self.pos_holdings["0a"]["stop_win_price"] = 0
             if stop_lose_order:
                 if stop_lose_order.status != StopOrderStatus.TRIGGERED:
                     self.cancel_order(stop_lose_order.stop_orderid)
                 self.pos_holdings["0a"]["stop_lose_order"] = None
+                self.pos_holdings["0a"]["stop_lose_price"] = 0
 
         # 建完仓，应该把open_order设置为None；
         # 平完仓，应该把两个stop_order设置为None，并将另一个stoporder、cancel掉
