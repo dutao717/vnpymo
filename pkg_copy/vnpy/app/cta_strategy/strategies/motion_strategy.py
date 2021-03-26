@@ -1,3 +1,5 @@
+import pandas as pd
+
 from vnpy.app.cta_strategy import (
     CtaTemplate,
     StopOrder,
@@ -18,7 +20,6 @@ from vnpy.trader.object import ContractData, OrderData
 from vnpy.trader.converter import PositionHolding
 from vnpy.trader.constant import Interval, Status, Direction
 from vnpy.app.cta_strategy.base import StopOrderStatus, StopOrder
-
 
 class MotionStrategy(CtaTemplate):
     """"""
@@ -82,6 +83,7 @@ class MotionStrategy(CtaTemplate):
         """
         self.write_log("策略初始化：" + self.__class__.__name__)
         self.k0 = {"ask1": 0, "bid1": 0}
+        self.k0_last = {"ask1": 0, "bid1": 0}
         self.k1 = {"open": 0, "high": 0, "low": 0, "close": 0}
         self.k2 = {"open": 0, "high": 0, "low": 0, "close": 0}
         self.open_position_condition = False
@@ -123,6 +125,8 @@ class MotionStrategy(CtaTemplate):
         # am = self.am
         # am.update_bar(bar)
         # load_bar 以及 inited，只是为了准备am数据
+        self.k0_last["ask1"] = self.k0["ask1"]
+        self.k0_last["bid1"] = self.k0["bid1"]
         self.k0["ask1"] = bar.close_price # ask1 卖一
         self.k0["bid1"] = bar.close_price # bid1 买一
         self.bgw.update_bar(bar) # trigger on_window_bar()
@@ -193,6 +197,9 @@ class MotionStrategy(CtaTemplate):
                     else:
                         vt_orderid = self.cover(stop_loss_price, pm.get_tgt_amt(p_name), True)[0]
                     pm.set_stop_loss_order(p_name, self.cta_engine.active_stop_orders[vt_orderid])
+                if stop_profit_order is not None:
+                    pass
+                # is not None, a
 
         self.put_event()
 
@@ -208,7 +215,6 @@ class MotionStrategy(CtaTemplate):
         self.k1["close"] = bar.close_price
 
         self.stop_loss_abs_distance = self.k1["high"] - self.k1["low"] + self.points_diff + self.error_space
-
 
         if self.k2["high"] >= self.k1["high"] and self.k2["low"] <= self.k1["low"]:
             self.inside_bar_signal = True
@@ -324,6 +330,7 @@ class MotionStrategy(CtaTemplate):
 
         # 建完仓，应该把open_order设置为None；
         # 平完仓，应该把两个stop_order设置为None，并将另一个stoporder、cancel掉
+        print("pd: pos", pm.get_pos_data())
 
         self.put_event()
 
@@ -401,11 +408,30 @@ class PosManager:
                 "stop_profit_price": 0,
                 "stop_loss_order":None,
                 "stop_profit_order": None,
-                "cost_basis": 0
+                "cost_basis": 0,
+                "stop_level": 0
             } for i in names
         }
         self.__order_pos_map = {}
         self.names = names
+        self.a_stop_levels = pd.DataFrame(
+            data=[
+                [0.8, 0.6, 1.2],
+                [1, 0.8, 1.4],
+                [1.2, 1, 2]
+            ],
+            columns=["price_ratio", "stop_loss_ratio", "stop_profit_ratio"],
+        )
+        self.b_stop_levels = pd.DataFrame(
+            data=[
+                [2, 0, 4],
+                [3, 1, 6],
+                [4, 2, 8],
+                [5, 1, 2]
+            ],
+            columns=["price_ratio", "stop_loss_ratio", "stop_profit_ratio"]
+        )
+        self.b_stop_level_top = {"price_ratio": 5, "delta_lost_ratio": 1, "delta_profit_ratio": 2}
 
     def get_pos_amt(self, name=None, direc=None):
         """
@@ -527,7 +553,18 @@ class PosManager:
         print(self.__order_pos_map)
         vt_orderid = ".".join([trade.gateway_name, trade.orderid])
         name = self.__order_pos_map[vt_orderid]  # 理论上一定会有对应的order的。所以，不用get
+        pd = self.__pos_data[name]
+
         ph = self.__pos_holdings[name]
+        new_pos_amt = self.get_pos_amt(name) + trade.volume * (trade.direction == Direction.LONG)
+        if new_pos_amt == 0:
+            cost_basis = 0
+        else:
+            cost_basis = (
+                pd["cost_basis"] * self.get_pos_amt(name) +
+                trade.price * trade.volume * (trade.direction == Direction.LONG)
+            ) / new_pos_amt
+        pd["cost_basis"] = cost_basis
         ph.update_trade(trade)
 
     def pos_name_of_trade(self, trade):
@@ -539,4 +576,33 @@ class PosManager:
         vt_orderid = order.vt_orderid
         name = self.__order_pos_map.get(vt_orderid)  # 如果是cross_stop_order的话，新的限价单on_order时，不存在对应的order。所以可能会返回None
         return name
+
+    def get_pos_data(self):
+        return self.__pos_data
+
+    def get_changed_stop_prices(self, name, curr_price, last_price, stop_loss_abs_distance):
+        """
+        :param name:
+        :param curr_price:
+        :param last_price:
+        :param levels: list of float
+        :return:
+        """
+        self.a_stop_levels
+        self.b_stop_levels
+        self.b_stop_level_top
+        assert stop_loss_abs_distance > 0
+        pd = self.__pos_data[name]
+        cost_basis = pd["cost_basis"]
+        if "a" in name:
+            curr_stop_ratio = (curr_price - cost_basis) / stop_loss_abs_distance
+            last_stop_ratio = (last_price - cost_basis) / stop_loss_abs_distance
+            if last_stop_ratio <= 0.8 and curr_stop_ratio > 0.8:
+                pass
+            elif last_stop_ratio <= 1 and curr_stop_ratio > 1:
+                pass
+            elif last_stop_ratio <= 1.2 and curr_stop_ratio > 1.2:
+                pass
+        else:
+            pass
 
