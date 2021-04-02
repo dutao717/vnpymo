@@ -172,11 +172,13 @@ class MotionStrategy(CtaTemplate):
 
                         open_order = self.cta_engine.active_limit_orders[vt_orderid]
                         pm.set_open_order(p_name, open_order)
+                        pm.set_stop_loss_abs_distance(p_name, self.stop_loss_abs_distance)
                         pm.set_stop_prices(
                             name=p_name,
                             stop_loss_price=stop_loss_price,
                             stop_profit_price=stop_profit_price
                         )
+                        # TODO：下订单log，当前状态。
         # ab单可以单独进行平仓的设定。直接对1a\1b\2a\2b\3a\3b进行循环。
         for p_name in pm.names:
             if pm.get_status(p_name) in (OPEN_FINISHED, CLOSE_STARTED):
@@ -191,16 +193,18 @@ class MotionStrategy(CtaTemplate):
                     else:
                         vt_orderid = self.cover(stop_profit_price, pm.get_tgt_amt(p_name))[0]
                     pm.set_stop_profit_order(p_name, self.cta_engine.active_limit_orders[vt_orderid])
+                    # TODO: 止盈单log
                 if stop_loss_order is None and stop_loss_price != 0:
                     if direc == Direction.LONG:
                         vt_orderid = self.sell(stop_loss_price, pm.get_tgt_amt(p_name), True)[0]
                     else:
                         vt_orderid = self.cover(stop_loss_price, pm.get_tgt_amt(p_name), True)[0]
                     pm.set_stop_loss_order(p_name, self.cta_engine.active_stop_orders[vt_orderid])
-                if stop_profit_order is not None:
+                    # TODO: 止盈单log
+                if (stop_profit_order is not None) and (stop_loss_order is not None):
                     # adjust_change_stop_level true, then set None and cancel and set new price
                     curr_price = self.k0["ask1"] if direc == Direction.LONG else self.k0["bid1"]
-                    if pm.adjust_stop_prices(p_name, curr_price, self.stop_loss_abs_distance):
+                    if pm.adjust_stop_prices(p_name, curr_price):
                         stop_profit_order = pm.get_stop_profit_order(p_name)
                         stop_loss_order = pm.get_stop_loss_order(p_name)
                         self.cancel_order(stop_profit_order.vt_orderid)
@@ -210,6 +214,8 @@ class MotionStrategy(CtaTemplate):
                         self.cancel_order(stop_loss_orderid)
                         pm.set_stop_profit_order(p_name, None)
                         pm.set_stop_loss_order(p_name, None)
+                        self.print_log("finish reset stop price")
+                        # TODO: 动态止盈log
 
         self.put_event()
 
@@ -426,7 +432,8 @@ class PosManager:
                 "stop_loss_order":None,
                 "stop_profit_order": None,
                 "cost_basis": 0,
-                "stop_level": 0
+                "stop_level": 0,
+                "R": 0
             } for i in names
         }
         self.__order_pos_map = {}
@@ -483,6 +490,12 @@ class PosManager:
     def set_tgt_amt(self, name, tgt_amt):
         self.__pos_data[name]["tgt_amt"] = tgt_amt
 
+    def get_stop_loss_abs_distance(self, name):
+        return self.__pos_data[name]["stop_loss_abs_distance"]
+
+    def set_stop_loss_abs_distance(self, name, stop_loss_abs_distance):
+        self.__pos_data[name]["stop_loss_abs_distance"] = stop_loss_abs_distance
+
     def get_direc(self, name):
         return self.__pos_data[name]["direc"]
 
@@ -535,7 +548,7 @@ class PosManager:
         if stop_loss_order is None:
             stop_order_old = self.__pos_data[name]["stop_loss_order"]
             self.__pos_data[name]["stop_loss_order"] = stop_loss_order
-            self.__pos_data[name]["stop_loss_price"] = 0
+            # self.__pos_data[name]["stop_loss_price"] = 0
             # self.__pos_data[name]["status"] = CLOSE_FINISHED
             if type(stop_order_old) == OrderData:
                 self.__order_pos_map.pop(stop_order_old.vt_orderid)
@@ -549,7 +562,7 @@ class PosManager:
         if stop_profit_order is None:
             stop_order_old = self.__pos_data[name]["stop_profit_order"]
             self.__pos_data[name]["stop_profit_order"] = stop_profit_order
-            self.__pos_data[name]["stop_profit_price"] = 0
+            # self.__pos_data[name]["stop_profit_price"] = 0
             # self.__pos_data[name]["status"] = CLOSE_FINISHED
             if type(stop_order_old) == OrderData:
                 self.__order_pos_map.pop(stop_order_old.vt_orderid)
@@ -581,13 +594,13 @@ class PosManager:
         pd = self.__pos_data[name]
 
         ph = self.__pos_holdings[name]
-        new_pos_amt = self.get_pos_amt(name) + trade.volume * (trade.direction == Direction.LONG)
+        new_pos_amt = self.get_pos_amt(name) + trade.volume * (1 if trade.direction == Direction.LONG else -1)
         if new_pos_amt == 0:
             cost_basis = 0
         else:
             cost_basis = (
                 pd["cost_basis"] * self.get_pos_amt(name) +
-                trade.price * trade.volume * (trade.direction == Direction.LONG)
+                trade.price * trade.volume * (1 if trade.direction == Direction.LONG else -1)
             ) / new_pos_amt
         pd["cost_basis"] = cost_basis
         ph.update_trade(trade)
@@ -605,7 +618,7 @@ class PosManager:
     def get_pos_data(self):
         return self.__pos_data
 
-    def adjust_stop_prices(self, name, curr_price, stop_loss_abs_distance):
+    def adjust_stop_prices(self, name, curr_price):
         """
         :param name:
         :param curr_price:
@@ -615,16 +628,20 @@ class PosManager:
         self.a_stop_levels
         self.b_stop_levels
         self.b_stop_level_top
-        assert stop_loss_abs_distance > 0
         pd = self.__pos_data[name]
         cost_basis = pd["cost_basis"]
         stop_level = pd["stop_level"]
+        stop_loss_abs_distance = pd["stop_loss_abs_distance"]
+        assert stop_loss_abs_distance > 0
+        direc = pd["direc"]
         next_level = stop_level + 1
         curr_level = stop_level
         changed = False
 
+        direc_coef = 1 if direc == Direction.LONG else -1
+
         if "a" in name:
-            curr_price_ratio = (curr_price - cost_basis) / stop_loss_abs_distance
+            curr_price_ratio = (curr_price - cost_basis) * direc_coef / stop_loss_abs_distance
             for i in self.a_stop_levels.loc[next_level:].index:
                 pr = self.a_stop_levels.get_value(i, "price_ratio")
                 if curr_price_ratio >= pr:
@@ -634,8 +651,8 @@ class PosManager:
                 stop_loss_ratio = self.a_stop_levels.get_value(curr_level, "stop_loss_ratio")
                 stop_profit_ratio = self.a_stop_levels.get_value(curr_level, "stop_profit_ratio")
                 pd["stop_level"] = curr_level
-                pd["stop_loss_price"] = cost_basis + stop_loss_ratio * stop_loss_abs_distance
-                pd["stop_profit_price"] = cost_basis + stop_profit_ratio * stop_loss_abs_distance
+                pd["stop_loss_price"] = cost_basis + stop_loss_ratio * stop_loss_abs_distance * direc_coef
+                pd["stop_profit_price"] = cost_basis + stop_profit_ratio * stop_loss_abs_distance * direc_coef
 
         else:
             pass
