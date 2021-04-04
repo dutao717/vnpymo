@@ -35,8 +35,8 @@ class MotionStrategy(CtaTemplate):
     k2_min_range = 0
     k1_min_range = 0
     inside_bar_pos_num = 1
-    points_diff = 2
-    error_space = 2
+    points_diff = 10
+    error_space = 5
     stop_loss_value = 10000
     open_amount = 5
     open_amount_style = "customized" ## costomized\fixed
@@ -133,8 +133,6 @@ class MotionStrategy(CtaTemplate):
 
         if not self.inited:
             return
-        # print("=======on_bar=======")
-        # self.print_log("bar: " + str(bar.datetime))
 
         assert len(self.pos_man.get_active_orders()) ==len(self.cta_engine.active_limit_orders)
         assert self.pos == self.pos_man.get_pos_amt()
@@ -152,7 +150,7 @@ class MotionStrategy(CtaTemplate):
                 for p_name in [str(p_num) + j for j in ["a", "b"]]:
                     open_order = pm.get_open_order(p_name)
                     if open_order is None: # 可以根据下单时间，计算open_order的持续时间，进行撤单、并设为None，实现多少个bar撤单
-                        self.print_log(self.get_signal_str(bar.datetime))
+                        self.print_log(self.get_signal_str(self.cta_engine.datetime))
                         if self.open_amount_costomized:
                             tgt_amt = max(
                                 round(self.stop_loss_value / (self.stop_loss_abs_distance * self.engine_params["size"])), 2)
@@ -163,22 +161,36 @@ class MotionStrategy(CtaTemplate):
                             order_amount = round(pm.get_tgt_amt(p_name) - pm.get_pos_amt(p_name))
                             vt_orderid = self.buy(self.k0["ask1"], order_amount)[0]
                             stop_loss_price=self.k1["low"] - self.error_space - self.points_diff
-                            stop_profit_price=self.k0["ask1"] + self.stop_loss_abs_distance
+                            # TODO: max a b stop_level 1
+                            stop_profit_price=self.k0["ask1"] + self.stop_loss_abs_distance * 100
                         else:
                             order_amount = round(pm.get_tgt_amt(p_name) + pm.get_pos_amt(p_name))
                             vt_orderid = self.short(self.k0["bid1"], order_amount)[0]
                             stop_loss_price=self.k1["high"] + self.error_space + self.points_diff
-                            stop_profit_price=self.k0["bid1"] - self.stop_loss_abs_distance
+                            # TODO: max a b stop_level 1
+                            stop_profit_price=self.k0["bid1"] - self.stop_loss_abs_distance * 100
 
                         open_order = self.cta_engine.active_limit_orders[vt_orderid]
                         pm.set_open_order(p_name, open_order)
                         pm.set_stop_loss_abs_distance(p_name, self.stop_loss_abs_distance)
+                        pm.set_init_stop_loss_price(p_name, stop_loss_price)
                         pm.set_stop_prices(
                             name=p_name,
                             stop_loss_price=stop_loss_price,
                             stop_profit_price=stop_profit_price
                         )
-                        # TODO：下订单log，当前状态。
+                        self.print_log(
+                            "=====%s: 开仓下单=====\n仓名: %s\n方向: %s\n数量: %s\n止盈价: %s\n止损价: %s\n止损绝对距离: %s\n" %(
+                                self.cta_engine.datetime,
+                                p_name,
+                                "多" if condition_long else "空",
+                                order_amount,
+                                stop_profit_price,
+                                stop_loss_price,
+                                self.stop_loss_abs_distance
+                            )
+                        )
+                        self.print_log(pm.get_pos_data_str(p_name, self.cta_engine.datetime))
         # ab单可以单独进行平仓的设定。直接对1a\1b\2a\2b\3a\3b进行循环。
         for p_name in pm.names:
             if pm.get_status(p_name) in (OPEN_FINISHED, CLOSE_STARTED):
@@ -193,20 +205,39 @@ class MotionStrategy(CtaTemplate):
                     else:
                         vt_orderid = self.cover(stop_profit_price, pm.get_tgt_amt(p_name))[0]
                     pm.set_stop_profit_order(p_name, self.cta_engine.active_limit_orders[vt_orderid])
-                    # TODO: 止盈单log
+                    self.print_log(
+                        "=====%s: 止盈下单=====\n仓名: %s\n方向: %s\n数量: %s\n止盈价: %s\n" % (
+                            self.cta_engine.datetime,
+                            p_name,
+                            direc,
+                            pm.get_tgt_amt(p_name),
+                            stop_profit_price
+                        )
+                    )
                 if stop_loss_order is None and stop_loss_price != 0:
                     if direc == Direction.LONG:
                         vt_orderid = self.sell(stop_loss_price, pm.get_tgt_amt(p_name), True)[0]
                     else:
                         vt_orderid = self.cover(stop_loss_price, pm.get_tgt_amt(p_name), True)[0]
                     pm.set_stop_loss_order(p_name, self.cta_engine.active_stop_orders[vt_orderid])
-                    # TODO: 止盈单log
+                    self.print_log(
+                        "=====%s: 止损下单=====\n仓名: %s\n方向: %s\n数量: %s\n止损价: %s\n" % (
+                            self.cta_engine.datetime,
+                            p_name,
+                            direc,
+                            pm.get_tgt_amt(p_name),
+                            stop_loss_price
+                        )
+                    )
                 if (stop_profit_order is not None) and (stop_loss_order is not None):
                     # adjust_change_stop_level true, then set None and cancel and set new price
                     curr_price = self.k0["ask1"] if direc == Direction.LONG else self.k0["bid1"]
+                    stop_level = pm.get_stop_level(p_name)
                     if pm.adjust_stop_prices(p_name, curr_price):
+
                         stop_profit_order = pm.get_stop_profit_order(p_name)
                         stop_loss_order = pm.get_stop_loss_order(p_name)
+
                         self.cancel_order(stop_profit_order.vt_orderid)
                         stop_loss_orderid = \
                             stop_loss_order.stop_orderid if type(stop_loss_order) == StopOrder else \
@@ -214,8 +245,24 @@ class MotionStrategy(CtaTemplate):
                         self.cancel_order(stop_loss_orderid)
                         pm.set_stop_profit_order(p_name, None)
                         pm.set_stop_loss_order(p_name, None)
-                        self.print_log("finish reset stop price")
-                        # TODO: 动态止盈log
+                        stop_loss_price_1, stop_profit_price_1 = pm.get_stop_prices(p_name)
+                        self.print_log(
+                            "=====%s: 止盈止损撤单重置=====\n仓名: %s\n方向: %s\n买入成本: %s\n当前价格: %s\n止损绝对距离: %s\n"
+                            "原stop_level: %s, 新stop_level: %s\n原止损价: %s, 新止损价: %s\n原止盈价: %s, 新止盈价: %s\n" % (
+                                self.cta_engine.datetime,
+                                p_name,
+                                direc,
+                                pm.get_cost_basis(p_name),
+                                curr_price,
+                                pm.get_stop_loss_abs_distance(p_name),
+                                stop_level,
+                                pm.get_stop_level(p_name),
+                                stop_loss_price,
+                                stop_loss_price_1,
+                                stop_profit_price,
+                                stop_profit_price_1,
+                            )
+                        )
 
         self.put_event()
 
@@ -256,9 +303,6 @@ class MotionStrategy(CtaTemplate):
         所以active_list_orders即便是只选择alive的order，也不会和ph.active_orders相等。
         ph更新之后active_orders只会有not_traded和part_traded。active_list_orders中值有not_traded和part_traded的数量等于ph.active_orders
         """
-        print("======on_order======")
-        print("order: ", order)
-        print("bar: " + str(order.datetime))
 
         # 在此处应该添加逻辑，判断当前是否有triggered的stoporder，如果有的话，检查symbol\direction\offset\volume是否相同，如果相同，则替换掉。
         # 根据订单编号进行update
@@ -271,53 +315,39 @@ class MotionStrategy(CtaTemplate):
                 stop_loss_order = pm.get_stop_loss_order(p_name)
                 if stop_loss_order is not None and type(stop_loss_order) == StopOrder and stop_loss_order.status == StopOrderStatus.TRIGGERED:
                     triggerred_stop_orders[p_name] = stop_loss_order
-            print("triggerred_stop_orders: ", triggerred_stop_orders)
             for p_name, stop_loss_order in triggerred_stop_orders.items():
                 if (
                         order.vt_symbol == stop_loss_order.vt_symbol and
                         order.direction == stop_loss_order.direction and order.price == stop_loss_order.price and
                         order.offset == stop_loss_order.offset and order.volume == stop_loss_order.volume):
                     stop_loss_order_set = True
-                    print("limit order: ", order)
-                    print("set_stop_loss_order: ", stop_loss_order.stop_orderid, order.vt_orderid)
                     pm.set_stop_loss_order(p_name, order)
+                    self.print_log(
+                        "=====%s: 止损单触发=====\n原止损单: %s\n新限价单: %s\n" %(
+                            self.cta_engine.datetime,
+                            stop_loss_order.stop_orderid,
+                            order.vt_orderid
+                        )
+                    )
                     break
             assert stop_loss_order_set, "Order id can't be found, and no triggered stop order matched."
         pm.update_order(order)
-        self.print_log("="*10 + "on_order" + "="*10)
-        self.print_log(self.get_order_str(order))
-
-        print("pos:" + str(self.pos))
-        print("active_limit_order:" ,self.cta_engine.active_limit_orders)
-        print("active_stop_order:", self.cta_engine.active_stop_orders)
-        print("ph: active_orders", pm.get_active_orders())
-
-        updated_active_limit_orders = {k: v for (k, v) in self.cta_engine.active_limit_orders.items() if v.is_active()}
-        print("updated_active_limit_orders:", updated_active_limit_orders)
+        self.print_log(self.get_order_str(order, self.cta_engine.datetime))
 
     def on_trade(self, trade: TradeData):
         """
         Callback of new trade data update.
         on_trade里面不要下单，只更新状态，因为如果下单，也是等下一个bar再成交，但是却破坏了当前bar的原子性。使得当前bar一开始的时候，ph.active_bars和active_limit_orders不相等
         """
-        print("=========on_trade=======")
-        print("trade:", trade)
         # 此处需要增加根据成交回报下达止损单的逻辑，但目前还不涉及实盘，不着急。
         # 根据订单变化进行update
+
         pm = self.pos_man
         pm.update_trade(trade)
-        # TODO: update_trade的时候计算cost_basis
-
         p_name = pm.pos_name_of_trade(trade)
-
-        print("pos:" + str(self.pos))
-        print("ph: pos", pm.get_pos_amt())
-        print("active_limit_order:", len(self.cta_engine.active_limit_orders))
-        print("active_stop_order:", len(self.cta_engine.active_stop_orders))
         assert self.pos == pm.get_pos_amt()
 
-        self.print_log("="*10 + "on_trade" + "="*10)
-        self.print_log("pos: " + str(self.pos))
+        self.print_log("=====%s: On Trade=====\n" % self.cta_engine.datetime)
 
         # ab单可以单独进行平仓的设定。直接对1a\1b\2a\2b\3a\3b进行循环。
         tgt_amt = pm.get_tgt_amt(p_name)
@@ -327,6 +357,7 @@ class MotionStrategy(CtaTemplate):
         direc = pm.get_direc(p_name)
         if tgt_amt != 0 and ((pos_amt == tgt_amt and direc == Direction.LONG) or (pos_amt == - tgt_amt and direc == Direction.SHORT)):
             pm.set_open_order(p_name, None)
+            self.print_log("====开仓完成: %s====\n仓名: %s\n" % (self.cta_engine.datetime, p_name))
         elif pos_l_amt == 0 and pos_s_amt == 0:
             pm.set_status(p_name, CLOSE_FINISHED)
             pm.set_stop_level(p_name, 0)
@@ -344,24 +375,22 @@ class MotionStrategy(CtaTemplate):
                     if stop_loss_order.status != Status.ALLTRADED:
                         self.cancel_order(stop_loss_order.vt_orderid)
                 pm.set_stop_loss_order(p_name, None)
+            self.print_log("=====%s平仓完成=====\n仓名: %s\n" % (self.cta_engine.datetime, p_name))
 
         # 建完仓，应该把open_order设置为None；
         # 平完仓，应该把两个stop_order设置为None，并将另一个stoporder、cancel掉
-        print("pd: pos", pm.get_pos_data())
-
+        self.print_log(pm.get_pos_data_str(p_name, self.cta_engine.datetime))
         self.put_event()
 
     def on_stop_order(self, stop_order: StopOrder):
         """
         Callback of stop order update.
         """
-        print("======on_stop_order======")
-        self.print_log("="*10 + "on_stop_order" + "="*10)
-        self.print_log(self.get_stop_order_str(stop_order))
+        self.print_log(self.get_stop_order_str(stop_order, self.cta_engine.datetime))
 
 
     def get_signal_str(self, dt):
-        signal_str = "Signal Info\n%s\nk2O:%s, k2C:%s\nk2H:%s, k2L:%s\nK1H:%s, k1L:%s\nk0A:%s, k0B:%s" % (
+        signal_str = "=====%s: Signal Info=====\nk2O:%s, k2C:%s\nk2H:%s, k2L:%s\nK1H:%s, k1L:%s\nk0A:%s, k0B:%s\n" % (
             dt,
             self.k2["open"],
             self.k2["close"],
@@ -374,8 +403,9 @@ class MotionStrategy(CtaTemplate):
         )
         return signal_str
 
-    def get_stop_order_str(self, order: StopOrder):
-        order_str = "on_stop_order\n%s, %s\n%s, %s\n%s, %s" %(
+    def get_stop_order_str(self, order: StopOrder, dt):
+        order_str = "=====%s: StopOrder=====\n%s, %s\n%s, %s\n%s, %s\n" %(
+            dt,
             order.stop_orderid,
             order.status.name,
             order.direction.name,
@@ -385,8 +415,9 @@ class MotionStrategy(CtaTemplate):
         )
         return order_str
 
-    def get_order_str(self, order: OrderData):
-        order_str = "on_order\n%s, %s\n%s, %s\n%s, %s" %(
+    def get_order_str(self, order: OrderData, dt):
+        order_str = "=====%s: OrderData=====\n%s, %s\n%s, %s\n%s, %s\n" %(
+            dt,
             order.vt_orderid,
             order.status.name,
             order.direction.name,
@@ -429,11 +460,12 @@ class PosManager:
                 "status": CLOSE_FINISHED,
                 "stop_loss_price": 0,
                 "stop_profit_price": 0,
+                "init_stop_loss_price": 0,
                 "stop_loss_order":None,
                 "stop_profit_order": None,
                 "cost_basis": 0,
                 "stop_level": 0,
-                "R": 0
+                "stop_loss_abs_distance": 0
             } for i in names
         }
         self.__order_pos_map = {}
@@ -451,13 +483,12 @@ class PosManager:
             data=[
                 [2, 0, 4],
                 [3, 1, 6],
-                [4, 2, 8],
-                [5, 1, 2]
+                [4, 2, 8]
             ],
             columns=["price_ratio", "stop_loss_ratio", "stop_profit_ratio"],
-            index=[1, 2, 3, 4]
+            index=[1, 2, 3]
         )
-        self.b_stop_level_top = {"price_ratio": 5, "delta_lost_ratio": 1, "delta_profit_ratio": 2}
+        self.b_stop_level_top = {"delta_loss_ratio": 1, "delta_profit_ratio": 2}
 
     def get_pos_amt(self, name=None, direc=None):
         """
@@ -529,6 +560,9 @@ class PosManager:
             self.__pos_data[name]["status"] = OPEN_STARTED
             self.__order_pos_map[open_order.vt_orderid] = name
 
+    def set_init_stop_loss_price(self, name, stop_loss_price):
+        self.__pos_data[name]["init_stop_loss_price"] = stop_loss_price
+
     def set_stop_prices(self, name, stop_loss_price, stop_profit_price):
         self.__pos_data[name]["stop_loss_price"] = stop_loss_price
         self.__pos_data[name]["stop_profit_price"] = stop_profit_price
@@ -587,6 +621,8 @@ class PosManager:
         else:
             return self.__pos_holdings[name].active_orders
 
+    def get_cost_basis(self, p_name):
+        return self.__pos_data[p_name]["cost_basis"]
     def update_trade(self, trade):
         print(self.__order_pos_map)
         vt_orderid = ".".join([trade.gateway_name, trade.orderid])
@@ -655,7 +691,62 @@ class PosManager:
                 pd["stop_profit_price"] = cost_basis + stop_profit_ratio * stop_loss_abs_distance * direc_coef
 
         else:
-            pass
+            init_stop_loss_price = pd["init_stop_loss_price"]
+            curr_price_ratio = (curr_price - cost_basis) / (cost_basis - init_stop_loss_price)
+            for i in self.b_stop_levels.loc[next_level:].index:
+                pr = self.b_stop_levels.get_value(i, "price_ratio")
+                if curr_price_ratio >= pr:
+                    curr_level = i
+                    changed = True
+            if curr_level >= self.b_stop_levels.index[-1]:
+                base_price_0 = (cost_basis - init_stop_loss_price) * self.b_stop_levels.price_ratio.iloc[-1] + cost_basis
+                base_price_1 = base_price_0 + stop_loss_abs_distance * direc_coef * (curr_level - self.b_stop_levels.index[-1])
+                if (curr_price - base_price_1) * direc_coef >= stop_loss_abs_distance:
+                    curr_level += ((curr_price - base_price_1) * direc_coef // stop_loss_abs_distance) * direc_coef
+                    changed = True
+
+            if changed:
+                pd["stop_level"] = curr_level
+                if curr_level <= self.b_stop_levels.index[-1]:
+                    stop_loss_ratio = self.b_stop_levels.get_value(curr_level, "stop_loss_ratio")
+                    stop_profit_ratio = self.b_stop_levels.get_value(curr_level, "stop_profit_ratio")
+                    pd["stop_loss_price"] = cost_basis + stop_loss_ratio * stop_loss_abs_distance * direc_coef
+                    pd["stop_profit_price"] = cost_basis + stop_profit_ratio * stop_loss_abs_distance * direc_coef
+                else:
+                    stop_loss_ratio = self.b_stop_levels.stop_loss_ratio.iloc[-1]
+                    stop_profit_ratio = self.b_stop_levels.stop_profit_ratio.iloc[-1]
+                    pd["stop_loss_price"] += (curr_level - stop_level) * stop_loss_abs_distance * direc_coef * self.b_stop_level_top["delta_loss_ratio"]
+                    pd["stop_profit_price"] += (curr_level - stop_level) * stop_loss_abs_distance * direc_coef * self.b_stop_level_top["delta_profit_ratio"]
 
         return changed
+
+    def get_pos_data_str(self, p_name, dt):
+        pd = self.__pos_data[p_name]
+        open_order = pd["open_order"]
+        open_order_id = open_order if open_order is None else open_order.vt_orderid
+        stop_profit_order = pd["stop_profit_order"]
+        stop_profit_order_id = stop_profit_order if stop_profit_order is None else stop_profit_order.vt_orderid
+        stop_loss_order = pd["stop_loss_order"]
+        stop_loss_order_id = None
+        if type(stop_loss_order) == OrderData:
+            stop_loss_order_id = stop_loss_order.vt_orderid
+        elif type(stop_loss_order) == StopOrder:
+            stop_loss_order_id = stop_loss_order.stop_orderid
+
+        pos_data_str = "=====%s: Pos Data=====\npos_name: %s\ntgt_amt: %s\nopen_order: %s\ndirec: %s\nstatus: %s\nstop_loss_price: %s\nstop_profit_price: %s\nstop_loss_order: %s\nstop_profit_order: %s\ncost_basis: %s\nstop_level: %s\nstop_loss_abs_distance: %s\n" %(
+            dt,
+            p_name,
+            pd["tgt_amt"],
+            open_order_id,
+            pd["direc"],
+            pd["status"],
+            pd["stop_loss_price"],
+            pd["stop_profit_price"],
+            stop_loss_order_id,
+            stop_profit_order_id,
+            pd["cost_basis"],
+            pd["stop_level"],
+            pd["stop_loss_abs_distance"]
+        )
+        return pos_data_str
 
