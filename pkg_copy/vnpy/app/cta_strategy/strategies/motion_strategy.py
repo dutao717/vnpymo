@@ -146,14 +146,17 @@ class MotionStrategy(CtaTemplate):
         for p_num in range(self.inside_bar_pos_num):
             p_a_name = str(p_num) + "a"
             p_b_name = str(p_num) + "b"
-            if self.open_position_condition and (condition_long or condition_short) and pm.get_status(p_a_name) in (CLOSE_FINISHED, OPEN_STARTED) and pm.get_status(p_b_name) in (CLOSE_FINISHED, OPEN_STARTED):
+            if self.open_position_condition and (condition_long or condition_short) and \
+                    pm.get_status(p_a_name) in (CLOSE_FINISHED, OPEN_STARTED) and \
+                    pm.get_status(p_b_name) in (CLOSE_FINISHED, OPEN_STARTED):
                 for p_name in [str(p_num) + j for j in ["a", "b"]]:
                     open_order = pm.get_open_order(p_name)
                     if open_order is None: # 可以根据下单时间，计算open_order的持续时间，进行撤单、并设为None，实现多少个bar撤单
                         self.print_log(self.get_signal_str(self.cta_engine.datetime))
                         if self.open_amount_costomized:
                             tgt_amt = max(
-                                round(self.stop_loss_value / (self.stop_loss_abs_distance * self.engine_params["size"])), 2)
+                                round(self.stop_loss_value / (
+                                        self.stop_loss_abs_distance * self.engine_params["size"])), 2)
                             pm.set_tgt_amt(p_name, tgt_amt)
 
                         if condition_long:
@@ -180,7 +183,8 @@ class MotionStrategy(CtaTemplate):
                             stop_profit_price=stop_profit_price
                         )
                         self.print_log(
-                            "=====%s: 开仓下单=====\n仓名: %s\n方向: %s\n数量: %s\n止盈价: %s\n止损价: %s\n止损绝对距离: %s\n" %(
+                            "=====%s: 开仓下单=====\n仓名: %s\n方向: %s\n数量: %s\n"
+                            "止盈价: %s\n止损价: %s\n止损绝对距离: %s\n" %(
                                 self.cta_engine.datetime,
                                 p_name,
                                 "多" if condition_long else "空",
@@ -284,7 +288,9 @@ class MotionStrategy(CtaTemplate):
         else:
             self.inside_bar_signal = False
 
-        condition_body = abs(self.k2["open"] - self.k2["close"]) >= self.body_ratio / 100 * abs(self.k2["high"] - self.k2["low"])  # 0 >= 0
+        condition_body = \
+            abs(self.k2["open"] - self.k2["close"]) >= \
+            self.body_ratio / 100 * abs(self.k2["high"] - self.k2["low"])  # 0 >= 0
         condition_k1_range = self.k1["high"] - self.k1["low"] > self.k1_min_range
         condition_k2_range = self.k2["high"] - self.k2["low"] > self.k2_min_range
         if self.inside_bar_signal and condition_body and condition_k1_range and condition_k2_range:
@@ -301,19 +307,23 @@ class MotionStrategy(CtaTemplate):
         Callback of new order data update.
         buy函数运行的时候，已经将order添加到active_limit_orders,但不会触发on_order,只有撮合的时候，会对order进行状态更新。
         所以active_list_orders即便是只选择alive的order，也不会和ph.active_orders相等。
-        ph更新之后active_orders只会有not_traded和part_traded。active_list_orders中值有not_traded和part_traded的数量等于ph.active_orders
+        ph更新之后active_orders只会有not_traded和part_traded。
+        active_list_orders中值有not_traded和part_traded的数量等于ph.active_orders
         """
 
-        # 在此处应该添加逻辑，判断当前是否有triggered的stoporder，如果有的话，检查symbol\direction\offset\volume是否相同，如果相同，则替换掉。
+        # 在此处应该添加逻辑，判断当前是否有triggered的stoporder
+        # 如果有的话，检查symbol\direction\offset\volume是否相同，如果相同，则替换掉。
         # 根据订单编号进行update
         pm = self.pos_man
-        # 此处不能直接获取p_name,如果是stop_loss_order转成order的话。首先是看能不能获取，如果存在，则返回不存在，则应该把所有的triggered_order都拿出来，然后和当前的order进行对比。
+        # 此处不能直接获取p_name,如果是stop_loss_order转成order的话。
+        # 首先是看能不能获取，如果存在，则返回不存在，则应该把所有的triggered_order都拿出来，然后和当前的order进行对比。
         if pm.pos_name_of_order(order) is None:
             triggerred_stop_orders = {}
             stop_loss_order_set = False
             for p_name in pm.names:
                 stop_loss_order = pm.get_stop_loss_order(p_name)
-                if stop_loss_order is not None and type(stop_loss_order) == StopOrder and stop_loss_order.status == StopOrderStatus.TRIGGERED:
+                if stop_loss_order is not None and type(stop_loss_order) == StopOrder and \
+                        stop_loss_order.status == StopOrderStatus.TRIGGERED:
                     triggerred_stop_orders[p_name] = stop_loss_order
             for p_name, stop_loss_order in triggerred_stop_orders.items():
                 if (
@@ -337,7 +347,8 @@ class MotionStrategy(CtaTemplate):
     def on_trade(self, trade: TradeData):
         """
         Callback of new trade data update.
-        on_trade里面不要下单，只更新状态，因为如果下单，也是等下一个bar再成交，但是却破坏了当前bar的原子性。使得当前bar一开始的时候，ph.active_bars和active_limit_orders不相等
+        on_trade里面不要下单，只更新状态，因为如果下单，也是等下一个bar再成交，但是却破坏了当前bar的原子性。
+        使得当前bar一开始的时候，ph.active_bars和active_limit_orders不相等
         """
         # 此处需要增加根据成交回报下达止损单的逻辑，但目前还不涉及实盘，不着急。
         # 根据订单变化进行update
@@ -355,7 +366,9 @@ class MotionStrategy(CtaTemplate):
         pos_l_amt = pm.get_pos_amt(p_name, Direction.LONG)
         pos_s_amt = pm.get_pos_amt(p_name, Direction.SHORT)
         direc = pm.get_direc(p_name)
-        if tgt_amt != 0 and ((pos_amt == tgt_amt and direc == Direction.LONG) or (pos_amt == - tgt_amt and direc == Direction.SHORT)):
+        if tgt_amt != 0 and (
+                (pos_amt == tgt_amt and direc == Direction.LONG) or
+                (pos_amt == - tgt_amt and direc == Direction.SHORT)):
             pm.set_open_order(p_name, None)
             self.print_log("====开仓完成: %s====\n仓名: %s\n" % (self.cta_engine.datetime, p_name))
         elif pos_l_amt == 0 and pos_s_amt == 0:
@@ -380,6 +393,9 @@ class MotionStrategy(CtaTemplate):
         # 建完仓，应该把open_order设置为None；
         # 平完仓，应该把两个stop_order设置为None，并将另一个stoporder、cancel掉
         self.print_log(pm.get_pos_data_str(p_name, self.cta_engine.datetime))
+
+        # TODO: 连续孕线处理逻辑。增加on_bar下单条件判断：某一持仓在孕线满足的前提下，是否可以下单。
+        # TODO: 增加一个是否立即强制平仓
         self.put_event()
 
     def on_stop_order(self, stop_order: StopOrder):
@@ -648,7 +664,8 @@ class PosManager:
 
     def pos_name_of_order(self, order):
         vt_orderid = order.vt_orderid
-        name = self.__order_pos_map.get(vt_orderid)  # 如果是cross_stop_order的话，新的限价单on_order时，不存在对应的order。所以可能会返回None
+        # 如果是cross_stop_order的话，新的限价单on_order时，不存在对应的order。所以可能会返回None
+        name = self.__order_pos_map.get(vt_orderid)
         return name
 
     def get_pos_data(self):
@@ -698,25 +715,29 @@ class PosManager:
                 if curr_price_ratio >= pr:
                     curr_level = i
                     changed = True
-            if curr_level >= self.b_stop_levels.index[-1]:
-                base_price_0 = (cost_basis - init_stop_loss_price) * self.b_stop_levels.price_ratio.iloc[-1] + cost_basis
-                base_price_1 = base_price_0 + stop_loss_abs_distance * direc_coef * (curr_level - self.b_stop_levels.index[-1])
+            top_level = self.b_stop_levels.index[-1]
+            top_price_ratio = self.b_stop_levels.price_ratio.iloc[-1]
+            if curr_level >= top_level:
+                base_price_0 = (cost_basis - init_stop_loss_price) * top_price_ratio + cost_basis
+                base_price_1 = base_price_0 + stop_loss_abs_distance * direc_coef * (curr_level - top_level)
                 if (curr_price - base_price_1) * direc_coef >= stop_loss_abs_distance:
-                    curr_level += ((curr_price - base_price_1) * direc_coef // stop_loss_abs_distance) * direc_coef
+                    curr_level += (curr_price - base_price_1) * direc_coef // stop_loss_abs_distance
                     changed = True
 
             if changed:
                 pd["stop_level"] = curr_level
-                if curr_level <= self.b_stop_levels.index[-1]:
+                if curr_level <= top_level:
                     stop_loss_ratio = self.b_stop_levels.get_value(curr_level, "stop_loss_ratio")
                     stop_profit_ratio = self.b_stop_levels.get_value(curr_level, "stop_profit_ratio")
                     pd["stop_loss_price"] = cost_basis + stop_loss_ratio * stop_loss_abs_distance * direc_coef
                     pd["stop_profit_price"] = cost_basis + stop_profit_ratio * stop_loss_abs_distance * direc_coef
                 else:
-                    stop_loss_ratio = self.b_stop_levels.stop_loss_ratio.iloc[-1]
-                    stop_profit_ratio = self.b_stop_levels.stop_profit_ratio.iloc[-1]
-                    pd["stop_loss_price"] += (curr_level - stop_level) * stop_loss_abs_distance * direc_coef * self.b_stop_level_top["delta_loss_ratio"]
-                    pd["stop_profit_price"] += (curr_level - stop_level) * stop_loss_abs_distance * direc_coef * self.b_stop_level_top["delta_profit_ratio"]
+                    pd["stop_loss_price"] += \
+                        (curr_level - stop_level) * stop_loss_abs_distance * \
+                        direc_coef * self.b_stop_level_top["delta_loss_ratio"]
+                    pd["stop_profit_price"] += \
+                        (curr_level - stop_level) * stop_loss_abs_distance * \
+                        direc_coef * self.b_stop_level_top["delta_profit_ratio"]
 
         return changed
 
@@ -733,20 +754,23 @@ class PosManager:
         elif type(stop_loss_order) == StopOrder:
             stop_loss_order_id = stop_loss_order.stop_orderid
 
-        pos_data_str = "=====%s: Pos Data=====\npos_name: %s\ntgt_amt: %s\nopen_order: %s\ndirec: %s\nstatus: %s\nstop_loss_price: %s\nstop_profit_price: %s\nstop_loss_order: %s\nstop_profit_order: %s\ncost_basis: %s\nstop_level: %s\nstop_loss_abs_distance: %s\n" %(
-            dt,
-            p_name,
-            pd["tgt_amt"],
-            open_order_id,
-            pd["direc"],
-            pd["status"],
-            pd["stop_loss_price"],
-            pd["stop_profit_price"],
-            stop_loss_order_id,
-            stop_profit_order_id,
-            pd["cost_basis"],
-            pd["stop_level"],
-            pd["stop_loss_abs_distance"]
-        )
+        pos_data_str = \
+            "=====%s: Pos Data=====\npos_name: %s\ntgt_amt: %s\nopen_order: %s\ndirec: %s\nstatus: %s\n" \
+            "stop_loss_price: %s\nstop_profit_price: %s\nstop_loss_order: %s\nstop_profit_order: %s\ncost_basis: %s\n" \
+            "stop_level: %s\nstop_loss_abs_distance: %s\n" %(
+                dt,
+                p_name,
+                pd["tgt_amt"],
+                open_order_id,
+                pd["direc"],
+                pd["status"],
+                pd["stop_loss_price"],
+                pd["stop_profit_price"],
+                stop_loss_order_id,
+                stop_profit_order_id,
+                pd["cost_basis"],
+                pd["stop_level"],
+                pd["stop_loss_abs_distance"]
+            )
         return pos_data_str
 
