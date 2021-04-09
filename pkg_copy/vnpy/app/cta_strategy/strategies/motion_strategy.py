@@ -34,7 +34,7 @@ class MotionStrategy(CtaTemplate):
     body_ratio = 50
     k2_min_range = 0
     k1_min_range = 0
-    inside_bar_pos_num = 1
+    inside_bar_pos_num = 3
     points_diff = 10
     error_space = 5
     stop_loss_value = 10000
@@ -147,6 +147,7 @@ class MotionStrategy(CtaTemplate):
             p_a_name = str(p_num) + "a"
             p_b_name = str(p_num) + "b"
             if self.open_position_condition and (condition_long or condition_short) and \
+                    pm.is_enabled(p_a_name) and pm.is_enabled(p_b_name) and \
                     pm.get_status(p_a_name) in (CLOSE_FINISHED, OPEN_STARTED) and \
                     pm.get_status(p_b_name) in (CLOSE_FINISHED, OPEN_STARTED):
                 for p_name in [str(p_num) + j for j in ["a", "b"]]:
@@ -197,7 +198,7 @@ class MotionStrategy(CtaTemplate):
                         self.print_log(pm.get_pos_data_str(p_name, self.cta_engine.datetime))
         # ab单可以单独进行平仓的设定。直接对1a\1b\2a\2b\3a\3b进行循环。
         for p_name in pm.names:
-            if pm.get_status(p_name) in (OPEN_FINISHED, CLOSE_STARTED):
+            if pm.is_enabled(p_name) and pm.get_status(p_name) in (OPEN_FINISHED, CLOSE_STARTED):
                 stop_profit_order = pm.get_stop_profit_order(p_name)
                 stop_loss_order = pm.get_stop_loss_order(p_name)
                 stop_loss_price, stop_profit_price = pm.get_stop_prices(p_name)
@@ -470,18 +471,19 @@ class PosManager:
         self.__pos_holdings = {i: PositionHolding(contract=c) for i in names}
         self.__pos_data = {
             i: {
+                "enabled": False,
                 "tgt_amt": tgt_amt,
-                "open_order": None,
                 "direc": Direction.LONG,
                 "status": CLOSE_FINISHED,
+                "cost_basis": 0,
                 "stop_loss_price": 0,
                 "stop_profit_price": 0,
                 "init_stop_loss_price": 0,
-                "stop_loss_order":None,
-                "stop_profit_order": None,
-                "cost_basis": 0,
+                "stop_loss_abs_distance": 0,
                 "stop_level": 0,
-                "stop_loss_abs_distance": 0
+                "open_order": None,
+                "stop_loss_order": None,
+                "stop_profit_order": None
             } for i in names
         }
         self.__order_pos_map = {}
@@ -530,6 +532,12 @@ class PosManager:
             elif direc == Direction.SHORT:
                 res = ph.short_pos
         return res
+
+    def is_enabled(self, name):
+        return self.__pos_data[name]["enabled"]
+
+    def set_enabled(self, name, enabled):
+        self.__pos_data[name]["enabled"] = enabled
 
     def get_tgt_amt(self, name):
         return self.__pos_data[name]["tgt_amt"]
