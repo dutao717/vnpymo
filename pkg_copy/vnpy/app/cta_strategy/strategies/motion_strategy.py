@@ -73,9 +73,22 @@ class MotionStrategy(CtaTemplate):
             tgt_amt=self.open_amount,
             names=[(str(i) + j) for i in range(self.inside_bar_pos_num) for j in ("a", "b")]
         )
+        self.pos_man.set_enabled("0a", True)
+        self.pos_man.set_enabled("0b", True)
         self.engine_params = {
             "size": self.cta_engine.size
         }
+        self.signal_operation_map = {
+            "0^禁_0^平_1^禁_1^平_2^禁_2^平": "1^True",
+            "0^启_0^持_1^禁_1^平_2^禁_2^平": "2^True",
+            "0^启_0^平_1^启_1^平$持$非_2^禁_2^平": "1^False_2^False",
+            "0^启_0^持_1^启_1^持_2^禁_2^平": "3^True",
+            "0^启_0^持_1^启_1^持_2^启_2^持": "1^False_2^False_3^False",
+            "0^启_0^平_1^启_1^平$持$非_2^启_2^平$持$非": "1^False_2^False_3^False",
+            "0^启_0^平$持$非_1^启_1^平_2^启_2^平$持$非": "1^False_2^False_3^False"
+        }
+        # 用csv文件进行配置
+
 
     def on_init(self):
         """
@@ -89,6 +102,7 @@ class MotionStrategy(CtaTemplate):
         self.open_position_condition = False
         self.stop_loss_abs_distance = 0
         self.open_amount_costomized = self.open_amount_style == "customized"
+
         # TODO：初始化持仓。
         # 注册或者说配置一个参数，告知回测引擎从第几个bar之后开始跑正式回测。10天的数据都跨过去。这个函数会给callback赋值，所以请使用。
         # 但是需要注意的是，在on_bar中，要含有以下逻辑，没有到10天，不可以下单。也就是self.inited = True之后才可以下单
@@ -396,6 +410,8 @@ class MotionStrategy(CtaTemplate):
         self.print_log(pm.get_pos_data_str(p_name, self.cta_engine.datetime))
 
         # TODO: 连续孕线处理逻辑。增加on_bar下单条件判断：某一持仓在孕线满足的前提下，是否可以下单。
+        # 开仓需要看enabled，平仓不用。这样，禁了以后，如果是持仓，则默默等到平仓；如果平仓，则不会开仓。
+
         # TODO: 增加一个是否立即强制平仓
         self.put_event()
 
