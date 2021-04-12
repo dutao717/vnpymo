@@ -87,7 +87,9 @@ class MotionStrategy(CtaTemplate):
             "0^启_0^平_1^启_1^平$持$非_2^启_2^平$持$非": "1^False_2^False_3^False",
             "0^启_0^平$持$非_1^启_1^平_2^启_2^平$持$非": "1^False_2^False_3^False"
         }
-        # 用csv文件进行配置
+        self.continuous_signal_operations = pd.read_csv(
+            "D:\\workspace_py3\\work_vnpy\\vnpymo\\continuous_signal_operations.csv",
+            index_col=0).on_trade_op.to_dict()
 
 
     def on_init(self):
@@ -413,6 +415,8 @@ class MotionStrategy(CtaTemplate):
         # 开仓需要看enabled，平仓不用。这样，禁了以后，如果是持仓，则默默等到平仓；如果平仓，则不会开仓。
 
         # TODO: 增加一个是否立即强制平仓
+        con_op = self.continuous_signal_operations
+        self.print_log(str(con_op.keys()))
         self.put_event()
 
     def on_stop_order(self, stop_order: StopOrder):
