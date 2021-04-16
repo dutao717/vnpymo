@@ -159,13 +159,19 @@ class MotionStrategy(CtaTemplate):
 
         condition_long = self.k0["ask1"] > self.k1["high"]
         condition_short = self.k0["bid1"] < self.k1["low"]
+        inside_bar_dts = self.pos_man.get_all_inside_bar_dts()
         for p_num in range(self.inside_bar_pos_num):
             p_a_name = str(p_num) + "a"
             p_b_name = str(p_num) + "b"
-            if self.open_position_condition and (condition_long or condition_short) and \
+            if self.open_position_condition and self.inside_bar_dt not in inside_bar_dts and \
+                    (condition_long or condition_short) and \
                     pm.is_enabled(p_a_name) and pm.is_enabled(p_b_name) and \
                     pm.get_status(p_a_name) in (CLOSE_FINISHED, OPEN_STARTED) and \
                     pm.get_status(p_b_name) in (CLOSE_FINISHED, OPEN_STARTED):
+                # 对于3号仓开仓的特殊逻辑：只有1号仓盈利，才能开3号仓
+                if p_num == 2 and (not pm.is_gaining_pnum(0, bar.close_price)):
+                    self.print_log("%s：仓号：%s 目前处于亏损状态，不能开仓" % (self.cta_engine.datetime, p_num))
+                    continue
                 for p_name in [str(p_num) + j for j in ["a", "b"]]:
                     open_order = pm.get_open_order(p_name)
                     if open_order is None: # 可以根据下单时间，计算open_order的持续时间，进行撤单、并设为None，实现多少个bar撤单
@@ -192,6 +198,7 @@ class MotionStrategy(CtaTemplate):
 
                         open_order = self.cta_engine.active_limit_orders[vt_orderid]
                         pm.set_open_order(p_name, open_order)
+                        pm.set_inside_bar_dt(p_name, self.inside_bar_dt)
                         pm.set_stop_loss_abs_distance(p_name, self.stop_loss_abs_distance)
                         pm.set_init_stop_loss_price(p_name, stop_loss_price)
                         pm.set_stop_prices(
@@ -200,10 +207,11 @@ class MotionStrategy(CtaTemplate):
                             stop_profit_price=stop_profit_price
                         )
                         self.print_log(
-                            "=====%s: 开仓下单=====\n仓名: %s\n方向: %s\n数量: %s\n"
+                            "=====%s: 开仓下单=====\n仓名: %s\n孕线: %s\n方向: %s\n数量: %s\n"
                             "止盈价: %s\n止损价: %s\n止损绝对距离: %s\n" %(
                                 self.cta_engine.datetime,
                                 p_name,
+                                self.inside_bar_dt,
                                 "多" if condition_long else "空",
                                 order_amount,
                                 stop_profit_price,
@@ -214,7 +222,7 @@ class MotionStrategy(CtaTemplate):
                         self.print_log(pm.get_pos_data_str(p_name, self.cta_engine.datetime))
         # ab单可以单独进行平仓的设定。直接对1a\1b\2a\2b\3a\3b进行循环。
         for p_name in pm.names:
-            if pm.is_enabled(p_name) and pm.get_status(p_name) in (OPEN_FINISHED, CLOSE_STARTED):
+            if pm.get_status(p_name) in (OPEN_FINISHED, CLOSE_STARTED):
                 stop_profit_order = pm.get_stop_profit_order(p_name)
                 stop_loss_order = pm.get_stop_loss_order(p_name)
                 stop_loss_price, stop_profit_price = pm.get_stop_prices(p_name)
@@ -251,6 +259,15 @@ class MotionStrategy(CtaTemplate):
                         )
                     )
                 if (stop_profit_order is not None) and (stop_loss_order is not None):
+                    # 增加强制平仓逻辑
+                    #   cancel调2个order，并下达平仓单
+                    if pm.get_special_close(p_name):
+                        if direc == Direction.LONG:
+                            self.sell
+                        elif direc == Direction.SHORT:
+                            self.cover
+                        pass
+
                     # adjust_change_stop_level true, then set None and cancel and set new price
                     curr_price = self.k0["ask1"] if direc == Direction.LONG else self.k0["bid1"]
                     stop_level = pm.get_stop_level(p_name)
@@ -302,6 +319,7 @@ class MotionStrategy(CtaTemplate):
 
         if self.k2["high"] >= self.k1["high"] and self.k2["low"] <= self.k1["low"]:
             self.inside_bar_signal = True
+            self.inside_bar_dt = bar.datetime
         else:
             self.inside_bar_signal = False
 
@@ -311,7 +329,6 @@ class MotionStrategy(CtaTemplate):
         condition_k1_range = self.k1["high"] - self.k1["low"] > self.k1_min_range
         condition_k2_range = self.k2["high"] - self.k2["low"] > self.k2_min_range
         if self.inside_bar_signal and condition_body and condition_k1_range and condition_k2_range:
-
             self.open_position_condition = True
         else:
             self.open_position_condition = False
@@ -383,6 +400,7 @@ class MotionStrategy(CtaTemplate):
         pos_l_amt = pm.get_pos_amt(p_name, Direction.LONG)
         pos_s_amt = pm.get_pos_amt(p_name, Direction.SHORT)
         direc = pm.get_direc(p_name)
+        status = pm.get_status(p_name)
         if tgt_amt != 0 and (
                 (pos_amt == tgt_amt and direc == Direction.LONG) or
                 (pos_amt == - tgt_amt and direc == Direction.SHORT)):
@@ -393,6 +411,13 @@ class MotionStrategy(CtaTemplate):
             pm.set_stop_level(p_name, 0)
             stop_profit_order = pm.get_stop_profit_order(p_name)
             stop_loss_order = pm.get_stop_loss_order(p_name)
+
+            # 如果3号单平仓，则2号单直接平仓。
+            p_num = int(p_name[0])
+            if p_num == 2:
+                if status != CLOSE_FINISHED:
+                    pm.set_special_close("1" + p_name[-1], True)
+
             if stop_profit_order:
                 if stop_profit_order.status != Status.ALLTRADED:
                     self.cancel_order(stop_profit_order.vt_orderid)
@@ -415,8 +440,26 @@ class MotionStrategy(CtaTemplate):
         # 开仓需要看enabled，平仓不用。这样，禁了以后，如果是持仓，则默默等到平仓；如果平仓，则不会开仓。
 
         # TODO: 增加一个是否立即强制平仓
+
+        e_0 = pm.get_enabled_status_pnum(0)
+        e_1 = pm.get_enabled_status_pnum(1)
+        e_2 = pm.get_enabled_status_pnum(2)
+        t_0 = pm.get_trading_status_pnum(0)
+        t_1 = pm.get_trading_status_pnum(1)
+        t_2 = pm.get_trading_status_pnum(2)
+        op_key = "0^%s_0^%s_1^%s_1^%s_2^%s_2^%s" % (e_0, t_0, e_1, t_1, e_2, t_2)
+        self.print_log(op_key)
         con_op = self.continuous_signal_operations
-        self.print_log(str(con_op.keys()))
+        op_val = con_op.get(op_key)
+        ops = [] if op_val is None else op_val.split("_")
+        # TODO: 是在下一根孕线，也就是下一个5分钟线的时候才进行更新。
+        # 0号仓在closed条件下不能disable。不不不，应该是，如果要全disable，则至少有一个仓是open状态，否则，ontrade不了，就触发不了0号仓的enable了。
+        # 也就是说，如果是3closed状态，那么就不要再把0号仓disable掉了。
+        # 任何在在enable的时候，都得是closed状态。不可以enable一个有持仓的仓
+        for _op in ops:
+            p_num_str, status = _op.split("^")
+            pm.set_enabled_status_pnum(int(p_num_str), status)
+            self.print_log("Set Position %s %s" %(p_num_str, status))
         self.put_event()
 
     def on_stop_order(self, stop_order: StopOrder):
@@ -494,6 +537,7 @@ class PosManager:
                 "enabled": False,
                 "tgt_amt": tgt_amt,
                 "direc": Direction.LONG,
+                "inside_bar_dt": None,
                 "status": CLOSE_FINISHED,
                 "cost_basis": 0,
                 "stop_loss_price": 0,
@@ -503,7 +547,8 @@ class PosManager:
                 "stop_level": 0,
                 "open_order": None,
                 "stop_loss_order": None,
-                "stop_profit_order": None
+                "stop_profit_order": None,
+                "special_close": False
             } for i in names
         }
         self.__order_pos_map = {}
@@ -558,6 +603,62 @@ class PosManager:
 
     def set_enabled(self, name, enabled):
         self.__pos_data[name]["enabled"] = enabled
+
+    def set_inside_bar_dt(self, name, dt):
+        self.__pos_data[name]["inside_bar_dt"] = dt
+
+    def get_all_inside_bar_dts(self):
+        return [self.__pos_data[i]["inside_bar_dt"] for i in self.names]
+
+    def is_gaining_pnum(self, pnum, curr_price):
+        a_name = str(pnum) + "a"
+        b_name = str(pnum) + "b"
+        a_profit = self.get_pos_amt(a_name) * (curr_price - self.get_cost_basis(a_name))
+        b_profit = self.get_pos_amt(b_name) * (curr_price - self.get_cost_basis(b_name))
+        return a_profit + b_profit > 0
+
+    def set_special_close(self, p_name, special_close):
+        self.__pos_data[name]["special_close"] = special_close
+
+    def get_special_close(self, p_name):
+        return self.__pos_data[name]["special_close"]
+
+    def get_enabled_status_pnum(self, pnum):
+        a_name = str(pnum) + "a"
+        b_name = str(pnum) + "b"
+        a_enabled = self.__pos_data[a_name]["enabled"]
+        b_enabled = self.__pos_data[b_name]["enabled"]
+        res = "other"
+        if a_enabled and b_enabled:
+            res = "enabled"
+        elif not a_enabled and not b_enabled:
+            res = "disabled"
+        return res
+
+    def set_enabled_status_pnum(self, pnum, status):
+        """
+        :param pnum:
+        :param status: "enabled" "disabled"
+        :return:
+        """
+        assert status in ("enabled", "disabled")
+        a_name = str(pnum) + "a"
+        b_name = str(pnum) + "b"
+        enabled = True if status == "enabled" else False
+        self.__pos_data[a_name]["enabled"] = enabled
+        self.__pos_data[b_name]["enabled"] = enabled
+
+    def get_trading_status_pnum(self, pnum):
+        a_name = str(pnum) + "a"
+        b_name = str(pnum) + "b"
+        a_status = self.__pos_data[a_name]["status"]
+        b_status = self.__pos_data[b_name]["status"]
+        res = "other"
+        if a_status in (OPEN_FINISHED, CLOSE_STARTED) or b_status in (OPEN_FINISHED, CLOSE_STARTED):
+            res = "opened"
+        elif a_status == CLOSE_FINISHED and b_status == CLOSE_FINISHED:
+            res = "closed"
+        return res
 
     def get_tgt_amt(self, name):
         return self.__pos_data[name]["tgt_amt"]
