@@ -1,0 +1,4 @@
+index,price_ratio,stop_loss_ratio,stop_profit_ratio
+1,2,0,4
+2,3,1,6
+3,4,2,8

@@ -29,6 +29,8 @@ class MotionStrategy(CtaTemplate):
     atr_value = 0
 
     ##  孕线策略
+    # 设置为本地vnpymo项目的目录
+    config_file_path = "F:\\4_workspace\\py3\\work_vnpy\\vnpymo\\"
     inside_bar_unit = "minute"  ## 1m\1h\1d
     inside_bar_length = 5
     body_ratio = 50
@@ -37,12 +39,14 @@ class MotionStrategy(CtaTemplate):
     inside_bar_pos_num = 3
     points_diff = 10
     error_space = 5
-    stop_loss_value = 10000
+    stop_loss_values_str = "0^10000_1^15000_2^20000"
     open_amount = 5
     open_amount_style = "customized" ## costomized\fixed
-    # k0_frequecy = "1m"  ## 1m\1h\1d 直接取回测设置中的周期即可，根据周期判断能否进行回测，并设置k0为相应的数值。
+    delta_loss_ratio = 1.0
+    delta_profit_ratio = 2.0
 
     parameters = [
+        "config_file_path",
         "inside_bar_unit",
         "inside_bar_length",
         "body_ratio",
@@ -51,9 +55,11 @@ class MotionStrategy(CtaTemplate):
         "inside_bar_pos_num",
         "points_diff",
         "error_space",
-        "stop_loss_value",
+        "stop_loss_values_str",
         "open_amount",
-        "open_amount_style"
+        "open_amount_style",
+        "delta_loss_ratio",
+        "delta_profit_ratio"
     ]
     variables = [
         "atr_value"
@@ -63,14 +69,19 @@ class MotionStrategy(CtaTemplate):
         """"""
         super().__init__(cta_engine, strategy_name, vt_symbol, setting)
 
-        self.interval = {"minute": Interval.MINUTE}.get(self.inside_bar_unit)
+        self.interval = {"minute": Interval.MINUTE, "hour": Interval.HOUR}.get(self.inside_bar_unit)
         self.bgw = BarGenerator(self.on_bar, self.inside_bar_length, self.on_window_bar, self.interval)
         self.am = ArrayManager(100)  # 取决于历史数据准备多长 x * inside_bar_length，参考进阶开仓条件
         print(self.cta_engine.vt_symbol, self.cta_engine.exchange)
+        a_stop_levels = pd.read_csv(self.config_file_path + "a_stop_levels.csv", index_col=0)
+        b_stop_levels = pd.read_csv(self.config_file_path + "b_stop_levels.csv", index_col=0)
+        stop_levels = {"a": a_stop_levels, "b": b_stop_levels, "b_top":{"delta_loss_ratio": self.delta_loss_ratio, "delta_profit_ratio": self.delta_profit_ratio}}
+
         self.pos_man = PosManager(
             symbol=self.cta_engine.symbol,
             exchange=self.cta_engine.exchange,
             tgt_amt=self.open_amount,
+            stop_levels=stop_levels,
             names=[(str(i) + j) for i in range(self.inside_bar_pos_num) for j in ("a", "b")]
         )
         self.pos_man.set_enabled("0a", True)
@@ -78,18 +89,11 @@ class MotionStrategy(CtaTemplate):
         self.engine_params = {
             "size": self.cta_engine.size
         }
-        self.signal_operation_map = {
-            "0^禁_0^平_1^禁_1^平_2^禁_2^平": "1^True",
-            "0^启_0^持_1^禁_1^平_2^禁_2^平": "2^True",
-            "0^启_0^平_1^启_1^平$持$非_2^禁_2^平": "1^False_2^False",
-            "0^启_0^持_1^启_1^持_2^禁_2^平": "3^True",
-            "0^启_0^持_1^启_1^持_2^启_2^持": "1^False_2^False_3^False",
-            "0^启_0^平_1^启_1^平$持$非_2^启_2^平$持$非": "1^False_2^False_3^False",
-            "0^启_0^平$持$非_1^启_1^平_2^启_2^平$持$非": "1^False_2^False_3^False"
-        }
+        self.stop_loss_values = dict([(i.split("^")[0], float(i.split("^")[1])) for i in self.stop_loss_values_str.split("_")])
         self.continuous_signal_operations = pd.read_csv(
-            "D:\\workspace_py3\\work_vnpy\\vnpymo\\continuous_signal_operations.csv",
+            self.config_file_path + "continuous_signal_operations.csv",
             index_col=0).on_trade_op.to_dict()
+
 
 
     def on_init(self):
@@ -119,6 +123,7 @@ class MotionStrategy(CtaTemplate):
         print(self.get_parameters())
         print(self.cta_engine.size)
         print(self.cta_engine.vt_symbol)
+        print(self.cta_engine.pricetick)
         self.print_log("策略启动")
 
     def on_stop(self):
@@ -170,7 +175,7 @@ class MotionStrategy(CtaTemplate):
                     pm.get_status(p_b_name) in (CLOSE_FINISHED, OPEN_STARTED):
                 # 对于3号仓开仓的特殊逻辑：只有1号仓盈利，才能开3号仓
                 if p_num == 2 and (not pm.is_gaining_pnum(0, bar.close_price)):
-                    self.print_log("%s：仓号：%s 目前处于亏损状态，不能开仓" % (self.cta_engine.datetime, p_num))
+                    self.print_log("====%s：仓号：%s 目前处于亏损状态，不能开仓====" % (self.cta_engine.datetime, p_num))
                     continue
                 for p_name in [str(p_num) + j for j in ["a", "b"]]:
                     open_order = pm.get_open_order(p_name)
@@ -178,8 +183,8 @@ class MotionStrategy(CtaTemplate):
                         self.print_log(self.get_signal_str(self.cta_engine.datetime))
                         if self.open_amount_costomized:
                             tgt_amt = max(
-                                round(self.stop_loss_value / (
-                                        self.stop_loss_abs_distance * self.engine_params["size"])), 2)
+                                round(self.stop_loss_values[str(p_num)] / (
+                                        self.stop_loss_abs_distance * self.engine_params["size"]) / 2), 1) # 每个仓是0.5的持仓量
                             pm.set_tgt_amt(p_name, tgt_amt)
 
                         if condition_long:
@@ -259,19 +264,28 @@ class MotionStrategy(CtaTemplate):
                         )
                     )
                 if (stop_profit_order is not None) and (stop_loss_order is not None):
-                    # 增加强制平仓逻辑
-                    #   cancel调2个order，并下达平仓单
-                    if pm.get_special_close(p_name):
-                        if direc == Direction.LONG:
-                            self.sell
-                        elif direc == Direction.SHORT:
-                            self.cover
-                        pass
-
-                    # adjust_change_stop_level true, then set None and cancel and set new price
                     curr_price = self.k0["ask1"] if direc == Direction.LONG else self.k0["bid1"]
                     stop_level = pm.get_stop_level(p_name)
-                    if pm.adjust_stop_prices(p_name, curr_price):
+                    if pm.get_special_close(p_name):
+                        # 强制平仓，将止盈单挂到市价
+                        stop_profit_order = pm.get_stop_profit_order(p_name)
+                        self.cancel_order(stop_profit_order.vt_orderid)
+                        pm.set_stop_profit_order(p_name, None)
+                        stop_profit_price_1 = curr_price - self.cta_engine.pricetick * (
+                            1 if direc == Direction.LONG else -1) * 1
+                        pm.set_stop_prices(p_name, stop_profit_price=stop_profit_price_1)
+                        self.print_log(
+                            "=====%s: 强制平仓挂止盈市价单=====\n仓名: %s\n方向: %s\n当前价格: %s\n挂单价格: %s\n" % (
+                                self.cta_engine.datetime,
+                                p_name,
+                                direc,
+                                curr_price,
+                                stop_profit_price_1,
+                            )
+                        )
+
+                    elif pm.adjust_stop_prices(p_name, curr_price):
+                        # adjust_change_stop_level true, then set None and cancel and set new price
 
                         stop_profit_order = pm.get_stop_profit_order(p_name)
                         stop_loss_order = pm.get_stop_loss_order(p_name)
@@ -401,23 +415,20 @@ class MotionStrategy(CtaTemplate):
         pos_s_amt = pm.get_pos_amt(p_name, Direction.SHORT)
         direc = pm.get_direc(p_name)
         status = pm.get_status(p_name)
+
+        t_2_origin = pm.get_trading_status_pnum(2)
+
         if tgt_amt != 0 and (
                 (pos_amt == tgt_amt and direc == Direction.LONG) or
                 (pos_amt == - tgt_amt and direc == Direction.SHORT)):
             pm.set_open_order(p_name, None)
-            self.print_log("====开仓完成: %s====\n仓名: %s\n" % (self.cta_engine.datetime, p_name))
+            self.print_log("====%s: 开仓完成====\n仓名: %s\n" % (self.cta_engine.datetime, p_name))
         elif pos_l_amt == 0 and pos_s_amt == 0:
             pm.set_status(p_name, CLOSE_FINISHED)
+            pm.set_special_close(p_name, False)
             pm.set_stop_level(p_name, 0)
             stop_profit_order = pm.get_stop_profit_order(p_name)
             stop_loss_order = pm.get_stop_loss_order(p_name)
-
-            # 如果3号单平仓，则2号单直接平仓。
-            p_num = int(p_name[0])
-            if p_num == 2:
-                if status != CLOSE_FINISHED:
-                    pm.set_special_close("1" + p_name[-1], True)
-
             if stop_profit_order:
                 if stop_profit_order.status != Status.ALLTRADED:
                     self.cancel_order(stop_profit_order.vt_orderid)
@@ -431,6 +442,8 @@ class MotionStrategy(CtaTemplate):
                         self.cancel_order(stop_loss_order.vt_orderid)
                 pm.set_stop_loss_order(p_name, None)
             self.print_log("=====%s平仓完成=====\n仓名: %s\n" % (self.cta_engine.datetime, p_name))
+
+
 
         # 建完仓，应该把open_order设置为None；
         # 平完仓，应该把两个stop_order设置为None，并将另一个stoporder、cancel掉
@@ -460,6 +473,21 @@ class MotionStrategy(CtaTemplate):
             p_num_str, status = _op.split("^")
             pm.set_enabled_status_pnum(int(p_num_str), status)
             self.print_log("Set Position %s %s" %(p_num_str, status))
+
+        # 如果3号单平仓，则2号单直接平仓。
+        p_num = int(p_name[0])
+        if p_num == 2:
+            if t_2_origin != "closed" and t_2 == "closed":
+                if pm.get_status("1a") != CLOSE_FINISHED:
+                    pm.set_special_close("1a", True)
+                    self.print_log(
+                        "====%s: 特殊平仓====\n仓名: %s\n状态: %s" % (self.cta_engine.datetime, "1a", pm.get_status("1a")))
+                if pm.get_status("1b") != CLOSE_FINISHED:
+                    pm.set_special_close("1b", True)
+                    self.print_log(
+                        "====%s: 特殊平仓====\n仓名: %s\n状态: %s" % (self.cta_engine.datetime, "1b", pm.get_status("1b")))
+
+
         self.put_event()
 
     def on_stop_order(self, stop_order: StopOrder):
@@ -515,7 +543,7 @@ class MotionStrategy(CtaTemplate):
 
 
 class PosManager:
-    def __init__(self, symbol, exchange, tgt_amt, names=None):
+    def __init__(self, symbol, exchange, tgt_amt, stop_levels, names=None):
         """
         :param symbol: str, contract symbol
         :param exchange: str, contract exchange
@@ -562,6 +590,7 @@ class PosManager:
             columns=["price_ratio", "stop_loss_ratio", "stop_profit_ratio"],
             index=[1, 2, 3]
         )
+        self.a_stop_levels = stop_levels["a"]
         self.b_stop_levels = pd.DataFrame(
             data=[
                 [2, 0, 4],
@@ -571,7 +600,9 @@ class PosManager:
             columns=["price_ratio", "stop_loss_ratio", "stop_profit_ratio"],
             index=[1, 2, 3]
         )
+        self.b_stop_levels = stop_levels["b"]
         self.b_stop_level_top = {"delta_loss_ratio": 1, "delta_profit_ratio": 2}
+        self.b_stop_level_top = stop_levels["b_top"]
 
     def get_pos_amt(self, name=None, direc=None):
         """
@@ -618,10 +649,10 @@ class PosManager:
         return a_profit + b_profit > 0
 
     def set_special_close(self, p_name, special_close):
-        self.__pos_data[name]["special_close"] = special_close
+        self.__pos_data[p_name]["special_close"] = special_close
 
     def get_special_close(self, p_name):
-        return self.__pos_data[name]["special_close"]
+        return self.__pos_data[p_name]["special_close"]
 
     def get_enabled_status_pnum(self, pnum):
         a_name = str(pnum) + "a"
@@ -708,9 +739,11 @@ class PosManager:
     def set_init_stop_loss_price(self, name, stop_loss_price):
         self.__pos_data[name]["init_stop_loss_price"] = stop_loss_price
 
-    def set_stop_prices(self, name, stop_loss_price, stop_profit_price):
-        self.__pos_data[name]["stop_loss_price"] = stop_loss_price
-        self.__pos_data[name]["stop_profit_price"] = stop_profit_price
+    def set_stop_prices(self, name, stop_loss_price=None, stop_profit_price=None):
+        if stop_loss_price is not None:
+            self.__pos_data[name]["stop_loss_price"] = stop_loss_price
+        if stop_profit_price is not None:
+            self.__pos_data[name]["stop_profit_price"] = stop_profit_price
 
     def get_stop_prices(self, name):
         pd = self.__pos_data[name]
