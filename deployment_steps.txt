@@ -1,0 +1,8 @@
+1.安装vnstudio2.19（请妥善保留这一版本的安装包，避免由于vnstudio更新导致策略异常） https://www.vnpy.com/
+2.将vnpymo-main.zip文件进行解压，可以看到pkg_copy目录以及一些csv配置文件。在程序的安装目录下（.../vnstudio/Lib/site-packages/），找到vnpy目录，将pkg_copy目录中的文件覆盖到vnpy中对应位置。
+3.通过桌面快捷方式启动vn_studio。选择微信登录。登录后，点击下方VN Trader Pro按钮，弹出界面后，在“上层应用”下拉列表中，勾选CtaStrategy、CtaBacktester、DataManager，点击启动。
+4.点击功能，数据管理，导入数据。选择文件，将rb2003.SHFE.csv文件导入进去，并在合约信息中设置代码为rb2003，交易所为SHFE。
+5.点击功能，CTA回测。在交易策略中选择“MotionStrategy”，本地代码设置为rb2003.SHFE。点击“开始回测”。
+6.开始回测后，在策略参数配置界面，配置config_file_path为csv配置文件所在目录路径（例如：F:\4_workspace\py3\work_vnpy\vnpymo-main\vnpymo-main\，请根据本地实际情况进行设定）。
+7.通过点击“代码编辑”按钮，查看和编辑策略源代码。
+
