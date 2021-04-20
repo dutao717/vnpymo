@@ -25,25 +25,38 @@ class MotionStrategy(CtaTemplate):
     """"""
 
     author = "用Python的交易员"
-
     atr_value = 0
 
-    ##  孕线策略
-    # 设置为本地vnpymo项目的目录
-    config_file_path = "F:\\4_workspace\\py3\\work_vnpy\\vnpymo\\"
+    ## 孕线策略
+    # a_step_level.csv等配置文件所在的目录，设置为本地vnpymo项目的目录
+    config_file_path = "D:\\workspace_py3\\work_vnpy\\vnpymo\\"
+    # config_file_path = "F:\\4_workspace\\py3\\work_vnpy\\vnpymo\\"
+    # 孕线周期的时间单位，可选值是minute\hour
     inside_bar_unit = "minute"  ## 1m\1h\1d
+    # 孕线周期的时间长度，结合时间单位确定周期。
     inside_bar_length = 5
+    # 实体比例（%）
     body_ratio = 50
+    # K2 最小波幅（元）
     k2_min_range = 0
+    # K1 最小波幅（元）
     k1_min_range = 0
-    inside_bar_pos_num = 3
+    # 点差（元）
     points_diff = 10
+    # 容错空间（元）
     error_space = 5
-    stop_loss_values_str = "0^10000_1^15000_2^20000"
+    # 固定开仓手数
     open_amount = 5
+    # 开仓数量方式：customized/fixed，前者条件下，自定义止损金额才可用，后者条件下，固定开仓手数才可用。
     open_amount_style = "customized" ## costomized\fixed
+    # b仓盈亏比达到F倍以后，每增加1个R，止损同步上升R的数量
     delta_loss_ratio = 1.0
+    # b仓盈亏比达到F被以后，每增加1个R，止盈同步上升R的数量
     delta_profit_ratio = 2.0
+    # 孕线信号最大持有数量，目前只支持3，其他数量下，程序会有意外问题。
+    inside_bar_pos_num = 3
+    # 自定义止损金额，格式：仓号^金额_仓号^金额_仓号^金额，数量和孕线信号最大持有数量相匹配
+    stop_loss_values_str = "0^10000_1^15000_2^20000"
 
     parameters = [
         "config_file_path",
@@ -52,14 +65,14 @@ class MotionStrategy(CtaTemplate):
         "body_ratio",
         "k2_min_range",
         "k1_min_range",
-        "inside_bar_pos_num",
         "points_diff",
         "error_space",
-        "stop_loss_values_str",
         "open_amount",
         "open_amount_style",
         "delta_loss_ratio",
-        "delta_profit_ratio"
+        "delta_profit_ratio",
+        "inside_bar_pos_num",
+        "stop_loss_values_str",
     ]
     variables = [
         "atr_value"
